@@ -1,0 +1,55 @@
+#!/bin/bash
+
+install -d /var/cache/subnet
+
+dlnew https://www.cloudflare.com/ips-v4 /var/cache/subnet/cloudflare-v4
+dlnew https://www.cloudflare.com/ips-v6 /var/cache/subnet/cloudflare-v6
+
+
+install -d /var/cache/subnet/amazonaws
+install -d /var/cache/subnet/amazonaws/service
+install -d /var/cache/subnet/amazonaws/region
+
+dlnew https://ip-ranges.amazonaws.com/ip-ranges.json /var/cache/subnet/amazonaws/ip-ranges.json
+
+cat /var/cache/subnet/amazonaws/ip-ranges.json |\
+jq -r '(.prefixes[], .ipv6_prefixes[]) | [if .ip_prefix then ("4", .ip_prefix) else ("6", .ipv6_prefix) end, .region, .service] | join(" ")' |\
+sort -k 3,3 -k 4,4 -k 1,1 -k 2,2 |\
+(
+	declare -A files
+	declare -A fdnums
+	fdnumStart=40
+	fdnumEnd=100
+	fdnum=$fdnumStart
+	
+	while read -r ipv range region service
+	do
+		for file in ip-ranges-v$ipv service/${service//[!a-zA-Z0-9_-]} region/${region//[!a-zA-Z0-9_-]}
+		do
+			if [ -z "${fdnums[$file]}" ]
+			then
+				if [ $fdnum -ge $fdnumEnd ]
+				then
+					for fd in "${fdnums[@]}"
+					do
+						exec {fd}>&-
+					done
+					fdnums=()
+					fdnum=$fdnumStart
+				fi
+				
+				if [ -z "${files[$file]}" ]
+				then
+					eval "exec $fdnum>$file"
+				else
+					eval "exec $fdnum>>$file"
+				fi
+				files[$file]=1
+				fdnums[$file]=$fdnum
+				let fdnum++
+			fi
+			
+			echo $range >&${fdnums[$file]}
+		done
+	done
+)
