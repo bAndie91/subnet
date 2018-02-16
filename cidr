@@ -66,3 +66,4 @@ multicast-ipv6		ff00::/8
 
 
 AMPRNet			44.0.0.0/8
+Cloudflare		/var/cache/subnet/cloudflare-v4 /var/cache/subnet/cloudflare-v6
