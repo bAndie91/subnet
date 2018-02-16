@@ -1,18 +1,32 @@
 #!/bin/bash
 
-install -d /var/cache/subnet
+### Create Cache Dir
 
-dlnew https://www.cloudflare.com/ips-v4 /var/cache/subnet/cloudflare-v4
-dlnew https://www.cloudflare.com/ips-v6 /var/cache/subnet/cloudflare-v6
+basedir=/var/cache/subnet
+
+install -d "$basedir"
 
 
-install -d /var/cache/subnet/amazonaws
-install -d /var/cache/subnet/amazonaws/service
-install -d /var/cache/subnet/amazonaws/region
+### Update CloudFlare
 
-dlnew https://ip-ranges.amazonaws.com/ip-ranges.json /var/cache/subnet/amazonaws/ip-ranges.json
+dlnew https://www.cloudflare.com/ips-v4 "$basedir"/cloudflare-v4
+dlnew https://www.cloudflare.com/ips-v6 "$basedir"/cloudflare-v6
 
-cat /var/cache/subnet/amazonaws/ip-ranges.json |\
+
+
+### Update AWS
+
+amazonawsdir=$basedir/amazonaws
+
+install -d $amazonawsdir
+install -d $amazonawsdir/service
+install -d $amazonawsdir/region
+
+dlnew https://ip-ranges.amazonaws.com/ip-ranges.json $amazonawsdir/ip-ranges.json
+
+set -e
+
+cat $amazonawsdir/ip-ranges.json |\
 jq -r '(.prefixes[], .ipv6_prefixes[]) | [if .ip_prefix then ("4", .ip_prefix) else ("6", .ipv6_prefix) end, .region, .service] | join(" ")' |\
 sort -k 3,3 -k 4,4 -k 1,1 -k 2,2 |\
 (
@@ -40,9 +54,9 @@ sort -k 3,3 -k 4,4 -k 1,1 -k 2,2 |\
 				
 				if [ -z "${files[$file]}" ]
 				then
-					eval "exec $fdnum>$file"
+					eval "exec $fdnum>$amazonawsdir/$file"
 				else
-					eval "exec $fdnum>>$file"
+					eval "exec $fdnum>>$amazonawsdir/$file"
 				fi
 				files[$file]=1
 				fdnums[$file]=$fdnum
@@ -53,3 +67,5 @@ sort -k 3,3 -k 4,4 -k 1,1 -k 2,2 |\
 		done
 	done
 )
+
+set +e
