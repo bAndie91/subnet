@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <err.h>
 #include <errno.h>
+#include <glob.h>
 
 #define NETNAME_MAX_LEN 127
 #define NETNAME_MAX_LEN_STR "127"
@@ -196,10 +197,16 @@ void print_string_array(char **a)
 	warnx("--");
 }
 
+int glob_error(const char *epath, int eerrno)
+{
+	warn("glob: %s", epath);
+	return -1;
+}
+
 
 /* File functions */
 
-FILE * file_open(char *path)
+FILE * file_open(const char *path)
 {
 	FILE *fhnd;
 	fhnd = fopen(path, "r");
@@ -284,7 +291,6 @@ int getCidrListByName(const char *netname, unsigned int *n_element, struct ipadd
 	char namebuf[NETNAME_MAX_LEN+1];
 	char cidrbuf[NETNAME_MAX_LEN+1];
 	char buf2char[2];
-	unsigned int n_hit = 0;
 	int netname_found = FALSE;
 	unsigned int i, alias_list_no;
 
@@ -314,13 +320,27 @@ int getCidrListByName(const char *netname, unsigned int *n_element, struct ipadd
 	
 	while(cidrfile_next_netname(cidr_fhnd, namebuf, NOSLURP))
 	{
+		int match = FALSE;
+		int is_prefix = FALSE;
+		
 		if(strcmp(netname, namebuf)==0)
 		{
-			int tokens;
-			netname_found = TRUE;
-
-			/* Try to resolve named subnet */
 			//warnx("NAME '%s'", namebuf);
+			match = TRUE;
+			netname_found = TRUE;
+		}
+		else if(namebuf[0] == '^' && strncmp(netname, (char*)namebuf+1, strlen(namebuf)-1)==0)
+		{
+			/* namebuf is a prefix matching to netname */
+			match = TRUE;
+			is_prefix = TRUE;
+		}
+		
+		if(match)
+		{
+			int tokens;
+			
+			/* Try to resolve named subnet */
 			next_token:
 				/* Read one word and optional newline char */
 				tokens = fscanf(cidr_fhnd, "%"NETNAME_MAX_LEN_STR"s%1[\n]", cidrbuf, buf2char);
@@ -331,16 +351,50 @@ int getCidrListByName(const char *netname, unsigned int *n_element, struct ipadd
 					if(cidrbuf[0] == '.' || cidrbuf[0] == '/')
 					{
 						/* cidrbuf is a path */
-						if(!getCidrListByFile(cidrbuf, n_element, result_list))
+						char *filepath = cidrbuf;
+						glob_t search_result;
+						search_result.gl_offs = 0;
+						
+						if(is_prefix)
 						{
-							errx(EXIT_PARSE_ERROR, "File error at '%s'", cidrbuf);
+							size_t n_path;
+							
+							int search = glob(cidrbuf, GLOB_ERR | GLOB_NOSORT, glob_error, &search_result);
+							if(search != 0 && search != GLOB_NOMATCH)
+							{
+								errx(EXIT_SYS_ERROR, "glob error at '%s'", cidrbuf);
+							}
+							for(n_path = 0; n_path < search_result.gl_pathc; n_path++)
+							{
+								if(strcmp(
+								 (char*)(strrchr(search_result.gl_pathv[n_path], '/')+1),
+								 (char*)(netname+strlen(namebuf)-1))==0)
+								{
+									netname_found = TRUE;
+									filepath = search_result.gl_pathv[n_path];
+									break;
+								}
+							}
+						}
+						
+						if(netname_found)
+						{
+							if(!getCidrListByFile(filepath, n_element, result_list))
+							{
+								errx(EXIT_PARSE_ERROR, "File error at '%s'", cidrbuf);
+							}
+						}
+						
+						if(is_prefix)
+						{
+							globfree(&search_result);
+							if(netname_found) break;
 						}
 					}
 					else if(strToCidr(cidrbuf, &this_cidr))
 					{
 						/* cidrbuf is a valid subnet definition */
 						append_to_ipaddr_list(&this_cidr, result_list, n_element);
-						n_hit++;
 					}
 					else
 					{
@@ -365,13 +419,13 @@ int getCidrListByName(const char *netname, unsigned int *n_element, struct ipadd
 	
 	file_close(cidr_fhnd);
 	
-	/* pop stack */
+	/* pop loop-detection stack */
 	linked_string_del(alias_list, alias_list_no);
 	if(alias_list_no == 0)
 	{
 		free(alias_list);
 	}
-
+	
 	return netname_found;
 }
 
