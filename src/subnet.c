@@ -1,4 +1,6 @@
 
+#define _GNU_SOURCE
+
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -52,54 +54,6 @@ typedef enum scan_mode_t {
 
 
 
-/* Network functions */
-
-int snmask(const char *cidr, ipaddr_t *addr)
-{
-	const char *ptr;
-
-	ptr = strchr(cidr, '/');
-	if(ptr == NULL) return FALSE;
-	ptr++;
-	addr->mask = atoi(ptr);
-	if(addr->mask > ADDRLEN_BY_AF(addr->af)) return FALSE;
-	return TRUE;
-}
-
-int parseIpStr(const char *str, ipaddr_t *addr)
-{
-	int ok;
-	
-	ok = inet_pton(AF_INET, str, &(addr->ip4));
-	if(ok == -1) perror("inet_pton");
-	addr->af = AF_INET;
-	
-	if(ok != 1)
-	{
-		ok = inet_pton(AF_INET6, str, &(addr->ip6));
-		addr->af = AF_INET6;
-	}
-	
-	if(ok == -1)
-	{
-		perror("inet_pton");
-		exit(EXIT_PARSE_ERROR);
-	}
-	return ok;
-}
-
-
-int strToCidr(const char *str, ipaddr_t *this_cidr)
-{
-	int ok = FALSE;
-	char *tmp = strdup(str);
-	char *ptr = strchr(tmp, '/');
-	if(ptr != NULL)	*ptr = '\0';
-	
-	if(parseIpStr(tmp, this_cidr) && snmask(str, this_cidr)) ok = TRUE;
-	free(tmp);
-	return ok;
-}
 
 /* System functions */
 
@@ -120,6 +74,62 @@ int glob_error(const char *epath, int eerrno)
 	warn("glob: %s", epath);
 	return -1;
 }
+
+
+
+
+/* Network functions */
+
+int snmask(const char *cidr, ipaddr_t addr)
+/* save mask value noted in cidr to addr, or return FALSE */
+{
+	const char *ptr;
+
+	ptr = strchr(cidr, '/');
+	if(ptr == NULL) return FALSE;
+	ptr++;
+	addr.mask = atoi(ptr);
+	if(addr.mask > ADDRLEN_BY_AF(addr.af)) return FALSE;
+	return TRUE;
+}
+
+int parseIpStr(const char *str, ipaddr_t addr)
+/* convert str to machine-represented IP address and save into addr, also save address family */
+{
+	int ok;
+	
+	ok = inet_pton(AF_INET, str, &(addr.ip4));
+	if(ok == -1) perror("inet_pton");
+	addr.af = AF_INET;
+	
+	if(ok != 1)
+	{
+		ok = inet_pton(AF_INET6, str, &(addr.ip6));
+		addr.af = AF_INET6;
+	}
+	
+	if(ok == -1)
+	{
+		perror("inet_pton");
+		exit(EXIT_PARSE_ERROR);
+	}
+	return ok;
+}
+
+int strToCidr(const char *str, ipaddr_t result_cidr)
+{
+	int ok = FALSE;
+	char *tmp = strdup(str);
+	if(tmp == NULL) no_mem(strlen(str));
+	char *ptr = strchr(tmp, '/');
+	if(ptr != NULL)	*ptr = '\0';
+	
+	if(parseIpStr(tmp, result_cidr) && snmask(str, result_cidr)) ok = TRUE;
+	free(tmp);
+	return ok;
+}
+
+
 
 
 /* File functions */
@@ -280,7 +290,7 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 					{
 						do_wildcards = TRUE;
 					}
-					else if(strToCidr(token_buf, &cidr))
+					else if(strToCidr(token_buf, cidr))
 					{
 						/* a CIDR found, will be passed to callback_func */
 					}
@@ -329,7 +339,7 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 							fh = file_open(search_result.gl_pathv[n_path]);
 							while(!feof(fh) && fscanf(fh, "%as", &cidr_str))
 							{
-								if(cidr_str == NULL) no_mem(0)
+								if(cidr_str == NULL) no_mem(0);
 								ctrl = WALK_CONTINUE;
 								if(cidr_str[0] == '#')
 								{
@@ -338,7 +348,7 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 								}
 								else if(strToCidr(cidr_str, cidr))
 								{
-									ctrl = callback_func(WALK_CIDR_FOUND, compound_alias, cidr, callback_data);
+									ctrl = callback_func(WALK_CIDR_FOUND, compound_alias, &cidr, callback_data);
 								}
 								else
 								{
@@ -372,7 +382,7 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 		
 		if(event != WALK_NONE)
 		{
-			ctrl = callback_func(event, token_buf, cidr, callback_data);
+			ctrl = callback_func(event, token_buf, &cidr, callback_data);
 		}
 		
 		
