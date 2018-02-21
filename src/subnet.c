@@ -394,7 +394,7 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 				/* newline char was not read, read up to the EOL */
 				slurp_eol(cidr_fhnd);
 			}
-			else if(token == 2)
+			else if(tokens == 2)
 			{
 				/* newline is read, cidr_fhnd is pointing to the beginning of a new line */
 			}
@@ -428,15 +428,13 @@ struct cb_data_FOR_print_if_match {
 walk_cidrs_control_t walk_cb_print_if_match(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, void *user_data_ptr)
 {
 	struct cb_data_FOR_print_if_match *user_data = user_data_ptr;
-	switch(event)
+	if(event == WALK_CIDR_FOUND)
 	{
-		case WALK_CIDR_FOUND:
-			if(in_subnet(user_data->addr, *cidr))
-			{
-				printf("%s\n", network_alias);
-				return WALK_NEXT_ALIAS;
-			}
-		break;
+		if(in_subnet(user_data->addr, *cidr))
+		{
+			printf("%s\n", network_alias);
+			return WALK_NEXT_ALIAS;
+		}
 	}
 	return WALK_CONTINUE;
 };
@@ -444,28 +442,33 @@ walk_cidrs_control_t walk_cb_print_if_match(walk_cidrs_event_t event, char *netw
 
 struct cb_data_FOR_stop_if_match {
 	ipaddr_t addr;
-	char **networks;
+	char **networks;  /* NULL-terminted list */
 	int result;
 };
 
 walk_cidrs_control_t walk_cb_stop_if_match(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, void *user_data_ptr)
 {
 	struct cb_data_FOR_stop_if_match *user_data = user_data_ptr;
-	switch(event)
+	char *alias;
+	
+	if(event == WALK_ALIAS_FOUND)
 	{
-		case WALK_ALIAS_FOUND:
-			if(!EQ(network_alias, user_data->alias))
+		for(alias = user_data->networks[0]; alias != NULL; alias = (char*)(alias+sizeof(char*)))
+		{
+			if(EQ(network_alias, alias))
 			{
-				return WALK_NEXT_ALIAS;
+				return WALK_CONTINUE;
 			}
-		break;
-		case WALK_CIDR_FOUND:
-			if(in_subnet(user_data->addr, *cidr))
-			{
-				user_data->result = TRUE;
-				return WALK_RETURN;
-			}
-		break;
+		}
+		return WALK_NEXT_ALIAS;
+	}
+	else if(event == WALK_CIDR_FOUND)
+	{
+		if(in_subnet(user_data->addr, *cidr))
+		{
+			user_data->result = TRUE;
+			return WALK_RETURN;
+		}
 	}
 	return WALK_CONTINUE;
 };
