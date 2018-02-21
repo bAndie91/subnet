@@ -449,13 +449,13 @@ struct cb_data_FOR_stop_if_match {
 walk_cidrs_control_t walk_cb_stop_if_match(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, void *user_data_ptr)
 {
 	struct cb_data_FOR_stop_if_match *user_data = user_data_ptr;
-	char *alias;
+	size_t idx;
 	
 	if(event == WALK_ALIAS_FOUND)
 	{
-		for(alias = user_data->networks[0]; alias != NULL; alias = (char*)(alias+sizeof(char*)))
+		for(idx = 0; user_data->networks[idx] != NULL; idx++)
 		{
-			if(EQ(network_alias, alias))
+			if(EQ(network_alias, user_data->networks[idx]))
 			{
 				return WALK_CONTINUE;
 			}
