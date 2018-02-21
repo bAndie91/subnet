@@ -80,7 +80,7 @@ int glob_error(const char *epath, int eerrno)
 
 /* Network functions */
 
-int snmask(const char *cidr, ipaddr_t addr)
+int snmask(const char *cidr, ipaddr_t *addr)
 /* save mask value noted in cidr to addr, or return FALSE */
 {
 	const char *ptr;
@@ -88,24 +88,24 @@ int snmask(const char *cidr, ipaddr_t addr)
 	ptr = strchr(cidr, '/');
 	if(ptr == NULL) return FALSE;
 	ptr++;
-	addr.mask = atoi(ptr);
-	if(addr.mask > ADDRLEN_BY_AF(addr.af)) return FALSE;
+	addr->mask = atoi(ptr);
+	if(addr->mask > ADDRLEN_BY_AF(addr->af)) return FALSE;
 	return TRUE;
 }
 
-int parseIpStr(const char *str, ipaddr_t addr)
+int parseIpStr(const char *str, ipaddr_t *addr)
 /* convert str to machine-represented IP address and save into addr, also save address family */
 {
 	int ok;
 	
-	ok = inet_pton(AF_INET, str, &(addr.ip4));
+	ok = inet_pton(AF_INET, str, &(addr->ip4));
 	if(ok == -1) perror("inet_pton");
-	addr.af = AF_INET;
+	addr->af = AF_INET;
 	
 	if(ok != 1)
 	{
-		ok = inet_pton(AF_INET6, str, &(addr.ip6));
-		addr.af = AF_INET6;
+		ok = inet_pton(AF_INET6, str, &(addr->ip6));
+		addr->af = AF_INET6;
 	}
 	
 	if(ok == -1)
@@ -116,7 +116,7 @@ int parseIpStr(const char *str, ipaddr_t addr)
 	return ok;
 }
 
-int strToCidr(const char *str, ipaddr_t result_cidr)
+int strToCidr(const char *str, ipaddr_t *result_cidr)
 {
 	int ok = FALSE;
 	char *tmp = strdup(str);
@@ -241,6 +241,7 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 	walk_cidrs_control_t ctrl;
 	scan_mode_t scan_mode;
 	bool do_wildcards;
+	bool was_eol;
 	
 	if((cidr_file = getenv("CIDR_FILE")) == NULL) cidr_file = CIDR_FILE;
 	
@@ -250,6 +251,7 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 	while(!feof(cidr_fhnd))
 	{
 		tokens = fscanf(cidr_fhnd, "%as%1[\n]", &token_buf, (char*)&lfbuf);
+		if(tokens == 2) was_eol = TRUE; else was_eol = FALSE;
 		event = WALK_NONE;
 		ctrl = WALK_CONTINUE;
 		do_wildcards = FALSE;
@@ -257,7 +259,7 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 		if(tokens >= 1)
 		{
 			if(token_buf == NULL) no_mem(0);
-			//warnx("token '%s'", token_buf);
+			warnx("scan_mode %d tokens %d token_buf '%s'", scan_mode, tokens, token_buf);
 			
 			if(strlen(token_buf) == 0 || token_buf[0] == '#')
 			{
@@ -290,7 +292,7 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 					{
 						do_wildcards = TRUE;
 					}
-					else if(strToCidr(token_buf, cidr))
+					else if(strToCidr(token_buf, &cidr))
 					{
 						/* a CIDR found, will be passed to callback_func */
 					}
@@ -346,7 +348,7 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 									/* ignore the rest of the line */
 									slurp_eol(fh);
 								}
-								else if(strToCidr(cidr_str, cidr))
+								else if(strToCidr(cidr_str, &cidr))
 								{
 									ctrl = callback_func(WALK_CIDR_FOUND, compound_alias, &cidr, callback_data);
 								}
@@ -389,14 +391,13 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 		if(ctrl == WALK_CONTINUE) /* no-op */;
 		else if(ctrl == WALK_NEXT_ALIAS)
 		{
-			if(tokens == 1)
+			if(!was_eol)
 			{
-				/* newline char was not read, read up to the EOL */
 				slurp_eol(cidr_fhnd);
-			}
-			else if(tokens == 2)
-			{
-				/* newline is read, cidr_fhnd is pointing to the beginning of a new line */
+				
+				free(current_netname);
+				current_netname = NULL;
+				scan_mode = SCAN_NETNAME;
 			}
 		}
 		else if(ctrl == WALK_RETURN) break;
@@ -408,7 +409,8 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 			free(token_buf);
 			token_buf = NULL;
 		}
-		if(tokens == 2)
+		
+		if(was_eol)
 		{
 			free(current_netname);
 			current_netname = NULL;
@@ -480,7 +482,7 @@ int main(int argc, char **argv)
 	
 	if(argc > 1)
 	{
-		if(!parseIpStr(argv[1], addr))
+		if(!parseIpStr(argv[1], &addr))
 		{
 			goto usage;
 		}
@@ -508,7 +510,7 @@ int main(int argc, char **argv)
 		/* First check given CIDRs */
 		for(idx = 2; idx < argc; idx++)
 		{
-			if(strToCidr(argv[idx], check_cidr))
+			if(strToCidr(argv[idx], &check_cidr))
 			{
 				if(in_subnet(addr, check_cidr))
 				{
