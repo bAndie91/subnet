@@ -7,131 +7,50 @@
 #include <errno.h>
 #include <glob.h>
 
-#define NETNAME_MAX_LEN 127
-#define NETNAME_MAX_LEN_STR "127"
-#define CIDR_MAX_LEN 43
 #define CIDR_FILE "/etc/cidr"
-#define ADDRLEN_BY_AF(x)	( (((x) == AF_INET) ? sizeof(struct in_addr) : ((x) == AF_INET6) ? sizeof(struct in6_addr) : 0)*8 )
-#define YESSLURP 1
-#define NOSLURP 0
-#define EXIT_UNKNOWN_SUBNET (EXIT_FAILURE + 1)
-#define EXIT_PARSE_ERROR    (EXIT_FAILURE + 2)
-#define EXIT_SYS_ERROR      (EXIT_FAILURE + 3)
-#define IN_NAMED_SUBNET_YES   0
-#define IN_NAMED_SUBNET_NO    1
-#define IN_NAMED_SUBNET_WRONG 2
+#define ADDRLEN_BY_AF(x) ( (((x) == AF_INET) ? sizeof(struct in_addr) : ((x) == AF_INET6) ? sizeof(struct in6_addr) : 0)*8 )
 #define TRUE 1
 #define FALSE 0
 
 
 
-char *cidr_file;
-struct ipaddr {
+typedef struct ipaddr {
 	int af;
 	struct in_addr ip4;
 	struct in6_addr ip6;
 	int mask;
+} ipaddr_t;
+typedef int bool;
+
+enum walk_cidrs_event_t {
+	WALK_NONE;
+	WALK_ALIAS_FOUND;
+	WALK_CIDR_FOUND;
+	WALK_ERROR;
+};
+enum walk_cidrs_control_t {
+	WALK_RETURN;
+	WALK_NEXT_ALIAS;
+	WALK_CONTINUE;
+};
+enum exit_code_t {
+	EXIT_MATCH = EXIT_SUCCESS;
+	EXIT_NO_MATCH = EXIT_FAILURE;
+	EXIT_UNKNOWN_NETWORK;
+	EXIT_PARSE_ERROR;
+	EXIT_SYS_ERROR;
+};
+enum scan_mode_t {
+	SCAN_NETNAME;
+	SCAN_CIDR;
+	SCAN_SUFFIX;
 };
 
-
-/* Linked List functions */
-
-struct linked_string {
-	char *str;
-	struct linked_string *next;
-};
-
-struct linked_string * linked_string_new()
-{
-	struct linked_string *lnk = malloc(sizeof(struct linked_string));
-	lnk->str = NULL;
-	lnk->next = NULL;
-	return lnk;
-}
-
-struct linked_string * linked_string_seek(struct linked_string *lnk, unsigned int n)
-{
-	while(n > 0)
-	{
-		lnk = lnk->next;
-		if(lnk == NULL) return NULL;
-		n--;
-	}
-	return lnk;
-}
-
-char * linked_string_get(struct linked_string *lnk, unsigned int n)
-{
-	lnk = linked_string_seek(lnk, n);
-	if(lnk == NULL) return NULL;
-	return lnk->str;
-}
-
-void linked_string_set(struct linked_string *lnk, unsigned int n, char *str)
-{
-	lnk = linked_string_seek(lnk, n);
-	if(lnk == NULL) return;
-	free(lnk->str);
-	lnk->str = strdup(str);
-}
-
-unsigned int linked_string_add(struct linked_string *lnk, const char *str)
-{
-	unsigned int n = 0;
-	struct linked_string *newlnk;
-	while(1)
-	{
-		if(lnk->str == NULL) break;
-		n++;
-		if(lnk->next == NULL) break;
-		lnk = lnk->next;
-	}
-	if(n == 0)
-	{
-		newlnk = lnk;
-	}
-	else
-	{
-		newlnk = malloc(sizeof(struct linked_string));
-		lnk->next = newlnk;
-	}
-	newlnk->str = strdup(str);
-	newlnk->next = NULL;
-	return n;
-}
-
-void linked_string_del(struct linked_string *lnk, unsigned int n)
-{
-	if(n == 0)
-	{
-		if(lnk->next == NULL)
-		{
-			free(lnk->str);
-			lnk->str = NULL;
-		}
-		else
-		{
-			struct linked_string *second_lnk = lnk->next;
-			lnk->str = second_lnk->str;
-			lnk->next = second_lnk->next;
-			free(second_lnk);
-		}
-	}
-	else
-	{
-		struct linked_string *prev_lnk = linked_string_seek(lnk, n-1);
-		lnk = prev_lnk->next;
-		if(prev_lnk == NULL || lnk == NULL) return;
-		free(lnk->str);
-		prev_lnk->next = lnk->next;
-		free(lnk);
-	}
-}
 
 
 /* Network functions */
 
-int snmask(const char *cidr, struct ipaddr *addr)
+int snmask(const char *cidr, ipaddr_t *addr)
 {
 	const char *ptr;
 
@@ -143,7 +62,7 @@ int snmask(const char *cidr, struct ipaddr *addr)
 	return TRUE;
 }
 
-int parseIpStr(const char *str, struct ipaddr *addr)
+int parseIpStr(const char *str, ipaddr_t *addr)
 {
 	int ok;
 	
@@ -166,7 +85,7 @@ int parseIpStr(const char *str, struct ipaddr *addr)
 }
 
 
-int strToCidr(const char *str, struct ipaddr *this_cidr)
+int strToCidr(const char *str, ipaddr_t *this_cidr)
 {
 	int ok = FALSE;
 	char *tmp = strdup(str);
@@ -180,21 +99,16 @@ int strToCidr(const char *str, struct ipaddr *this_cidr)
 
 /* System functions */
 
+bool EQ(char* a, char* b)
+{
+	if(a==NULL || b==NULL || strcmp(a,b) != 0) return FALSE;
+	return TRUE;
+}
+
 void no_mem(int sz)
 {
 	warnx("Could not allocate %u bytes of memory.", sz);
 	abort();
-}
-
-void print_string_array(char **a)
-{
-	int i = 0;
-	while(a[i] != NULL)
-	{
-		warnx("[%u] %p '%s'", i, a[i], a[i]);
-		i++;
-	}
-	warnx("--");
 }
 
 int glob_error(const char *epath, int eerrno)
@@ -206,7 +120,7 @@ int glob_error(const char *epath, int eerrno)
 
 /* File functions */
 
-FILE * file_open(const char *path)
+FILE *file_open(const char *path)
 {
 	FILE *fhnd;
 	fhnd = fopen(path, "r");
@@ -219,217 +133,14 @@ void file_close(FILE *hnd)
 	fclose(hnd);
 }
 
-void slurp_eol(FILE *hnd)
+void slurp_eol(FILE *fh)
 {
 	char c;
-	while(!feof(hnd) && (c = fgetc(hnd)) != '\n');
+	while(!feof(fh) && (c = fgetc(fh)) != '\n');
 }
 
-int cidrfile_next_netname(FILE *hnd, char *namebuf, int doSlurp)
-{
-	while(TRUE)
-	{
-		if(feof(hnd)) break;
-		if(doSlurp && ftell(hnd) != 0) slurp_eol(hnd);
-		if(fscanf(hnd, "%s", namebuf) == 1)
-		{
-			if(strlen(namebuf) == 0 || namebuf[0] == '#') continue;
-			return TRUE;
-		}
-	}
-	return FALSE;
-}
 
-void append_to_ipaddr_list(struct ipaddr *new_ipaddr, struct ipaddr **list, unsigned int *n_element)
-{
-	int list_size_new = sizeof(struct ipaddr) * ((*n_element) + 1);
-	*list = (*n_element == 0) ? malloc(list_size_new) : realloc(*list, list_size_new);
-	if(*list == NULL) no_mem(list_size_new);
-	memcpy(&(*list)[*n_element], new_ipaddr, sizeof(struct ipaddr));
-	(*n_element)++;
-}
-
-int getCidrListByFile(const char *filepath, unsigned int *n_element, struct ipaddr **result_list)
-{
-	FILE *fhnd;
-	char cidrbuf[CIDR_MAX_LEN+1];
-	struct ipaddr this_cidr;
-	
-	/* Read CIDR list file */
-	fhnd = file_open(filepath);
-	
-	while(!feof(fhnd) && fscanf(fhnd, "%s", cidrbuf))
-	{
-		if(cidrbuf[0] != '#')
-		{
-			if(strToCidr(cidrbuf, &this_cidr))
-			{
-				/* cidrbuf is a valid subnet definition */
-				append_to_ipaddr_list(&this_cidr, result_list, n_element);
-			}
-			else
-			{
-				errx(EXIT_PARSE_ERROR, "Invalid CIDR definition '%s' in file '%s'", cidrbuf, filepath);
-			}
-		}
-	}
-	file_close(fhnd);
-	return TRUE;
-}
-
-int getCidrListByName(const char *netname, unsigned int *n_element, struct ipaddr **result_list, struct linked_string *alias_list)
-{
-	/*
-		netname			string search for in CIDR list file
-		n_element		pointer to an integer holding number of elements in result_list
-		result_list		array of found CIDRs
-		ptr_alias_stack	pointer to an array of strings each holding a subnet name to be resolved and terminated 
-						by a NULL element, or ptr_alias_stack == NULL if there is no array initialized
-		return			found: TRUE, not found: FALSE
-	 */
-	FILE *cidr_fhnd;
-	char namebuf[NETNAME_MAX_LEN+1];
-	char cidrbuf[NETNAME_MAX_LEN+1];
-	char buf2char[2];
-	int netname_found = FALSE;
-	unsigned int i, alias_list_no;
-
-	/* Maintain stack of aliases */
-	if(alias_list == NULL)
-	{
-		alias_list = linked_string_new();
-	}
-
-	/* Check against resolving loop */
-	i = 0;
-	while(1)
-	{
-		char *str = linked_string_get(alias_list, i);
-		if(str == NULL) break;
-		if(strcmp(str, netname) == 0)
-		{
-			errx(EXIT_PARSE_ERROR, "Subnet resolving loop detected at '%s'", netname);
-		}
-		i++;
-	}
-	alias_list_no = linked_string_add(alias_list, netname);
-	
-	
-	/* Read Alias+CIDR definitions file */
-	cidr_fhnd = file_open(cidr_file);
-	
-	while(cidrfile_next_netname(cidr_fhnd, namebuf, NOSLURP))
-	{
-		int match = FALSE;
-		int is_prefix = FALSE;
-		
-		if(strcmp(netname, namebuf)==0)
-		{
-			//warnx("NAME '%s'", namebuf);
-			match = TRUE;
-			netname_found = TRUE;
-		}
-		else if(namebuf[0] == '^' && strncmp(netname, (char*)namebuf+1, strlen(namebuf)-1)==0)
-		{
-			/* namebuf is a prefix matching to netname */
-			match = TRUE;
-			is_prefix = TRUE;
-		}
-		
-		if(match)
-		{
-			int tokens;
-			
-			/* Try to resolve named subnet */
-			next_token:
-				/* Read one word and optional newline char */
-				tokens = fscanf(cidr_fhnd, "%"NETNAME_MAX_LEN_STR"s%1[\n]", cidrbuf, buf2char);
-				if(tokens > 0)
-				{
-					//warnx("  CIDR '%s'", cidrbuf);
-					struct ipaddr this_cidr;
-					if(cidrbuf[0] == '.' || cidrbuf[0] == '/')
-					{
-						/* cidrbuf is a path */
-						char *filepath = cidrbuf;
-						glob_t search_result;
-						search_result.gl_offs = 0;
-						
-						if(is_prefix)
-						{
-							size_t n_path;
-							
-							int search = glob(cidrbuf, GLOB_ERR | GLOB_NOSORT, glob_error, &search_result);
-							if(search != 0 && search != GLOB_NOMATCH)
-							{
-								errx(EXIT_SYS_ERROR, "glob error at '%s'", cidrbuf);
-							}
-							for(n_path = 0; n_path < search_result.gl_pathc; n_path++)
-							{
-								if(strcmp(
-								 (char*)(strrchr(search_result.gl_pathv[n_path], '/')+1),
-								 (char*)(netname+strlen(namebuf)-1))==0)
-								{
-									netname_found = TRUE;
-									filepath = search_result.gl_pathv[n_path];
-									break;
-								}
-							}
-						}
-						
-						if(netname_found)
-						{
-							if(!getCidrListByFile(filepath, n_element, result_list))
-							{
-								errx(EXIT_PARSE_ERROR, "File error at '%s'", cidrbuf);
-							}
-						}
-						
-						if(is_prefix)
-						{
-							globfree(&search_result);
-							if(netname_found) break;
-						}
-					}
-					else if(strToCidr(cidrbuf, &this_cidr))
-					{
-						/* cidrbuf is a valid subnet definition */
-						append_to_ipaddr_list(&this_cidr, result_list, n_element);
-					}
-					else
-					{
-						/* cidrbuf is a network name or an invalid subnet definition */
-						if(!getCidrListByName(cidrbuf, n_element, result_list, alias_list))
-						{
-							errx(EXIT_PARSE_ERROR, "Invalid CIDR definition '%s'", cidrbuf);
-						}
-					}
-					
-					/* Newline found */
-					if(tokens >= 2) break;
-					else goto next_token;
-				}
-			break;
-		}
-		else
-		{
-			slurp_eol(cidr_fhnd);
-		}
-	}
-	
-	file_close(cidr_fhnd);
-	
-	/* pop loop-detection stack */
-	linked_string_del(alias_list, alias_list_no);
-	if(alias_list_no == 0)
-	{
-		free(alias_list);
-	}
-	
-	return netname_found;
-}
-
-int in_subnet(struct ipaddr addr, struct ipaddr subnet)
+bool in_subnet(ipaddr_t addr, ipaddr_r subnet)
 {
 	if(addr.af != subnet.af) return FALSE;
 	if(subnet.mask == 0) return TRUE;
@@ -447,7 +158,7 @@ int in_subnet(struct ipaddr addr, struct ipaddr subnet)
 	{
 		int off;
 		int rmask = subnet.mask;
-		int ok = TRUE;
+		bool ok = TRUE;
 		for(off = 0; off < 16; off++)
 		{
 			uint8_t a, n, m;
@@ -475,35 +186,232 @@ int in_subnet(struct ipaddr addr, struct ipaddr subnet)
 	}
 }
 
-int in_named_subnet(struct ipaddr addr, const char *netname)
-{
-	unsigned int c_net = 0, n_elem = 0;
-	struct ipaddr *subnet_list;
 
-	if(getCidrListByName(netname, &n_elem, &subnet_list, NULL))
+bool walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, ipaddr_t*, void*), void *callback_data)
+{
+	char *cidr_file;
+	char *token_buf = NULL;
+	char *current_netname = NULL;
+	char lfbuf[2];
+	ipaddr_t cidr;
+	int tokens;
+	walk_cidrs_control_t ctrl;
+	scan_mode_t scan_mode;
+	bool do_wildcards;
+	
+	if((cidr_file = getenv("CIDR_FILE")) == NULL) cidr_file = CIDR_FILE;
+	
+	cidr_fhnd = file_open(cidr_file);
+	scan_mode = SCAN_NETNAME;
+	
+	while(!feof(cidr_fhnd))
 	{
-		while(c_net < n_elem)
+		tokens = fscanf(cidr_fhnd, "%as%1[\n]", &token_buf, &lfbuf);
+		event = WALK_NONE;
+		ctrl = WALK_CONTINUE;
+		do_wildcards = FALSE;
+		
+		if(tokens >= 1)
 		{
-			if(in_subnet(addr, subnet_list[c_net])) return IN_NAMED_SUBNET_YES;
-			c_net++;
+			if(token_buf == NULL) no_mem(0);
+			//warnx("token '%s'", token_buf);
+			
+			if(strlen(token_buf) == 0 || token_buf[0] == '#')
+			{
+				/* skip the rest of line */
+				ctrl = WALK_NEXT_ALIAS;
+			}
+			else
+			{
+				if(scan_mode == SCAN_NETNAME)
+				{
+					if(token_buf[0] == '^')
+					{
+						current_netname = strdup((char*)(token_buf+1));
+						scan_mode = SCAN_SUFFIX;
+					}
+					else
+					{
+						event = WALK_ALIAS_FOUND;
+						current_netname = strdup(token_buf);
+						scan_mode = SCAN_CIDR;
+					}
+					
+					if(current_netname == NULL) no_mem(strlen(token_buf));
+				}
+				else if(scan_mode == SCAN_CIDR)
+				{
+					event = WALK_CIDR_FOUND;
+					
+					if(token_buf[0] == '/' || token_buf[0] == '.')
+					{
+						do_wildcards = TRUE;
+					}
+					else if(strToCidr(token_buf, cidr))
+					{
+						/* a CIDR found, will be passed to callback_func */
+					}
+					else
+					{
+						recurse...
+					}
+				}
+				else if(scan_mode == SCAN_SUFFIX)
+				{
+					do_wildcards = TRUE;
+				}
+				
+				if(do_wildcards)
+				{
+					glob_t search_result;
+					search_result.gl_offs = 0;
+					size_t n_path;
+					char *compound_alias;
+					FILE *fh;
+					char *cidr_str;
+					
+					int search = glob(token_buf, GLOB_ERR | GLOB_NOSORT, glob_error, &search_result);
+					if(search != 0 && search != GLOB_NOMATCH)
+					{
+						errx(EXIT_SYS_ERROR, "glob error at '%s'", token_buf);
+					}
+					for(n_path = 0; n_path < search_result.gl_pathc; n_path++)
+					{
+						compound_alias = NULL;
+						asprintf(&compound_alias, "%s%s", current_netname, (char*)(strrchr(search_result.gl_pathv[n_path], '/')+1));
+						if(compound_alias == NULL) no_mem(0);
+						
+						ctrl = callback_func(WALK_ALIAS_FOUND, compound_alias, NULL, callback_data);
+						if(ctrl == WALK_RETURN) break;
+						else if(ctrl == WALK_NEXT_ALIAS) goto next_file;
+						else if(ctrl == WALK_CONTINUE)
+						{
+							fh = file_open(search_result.gl_pathv[n_path]);
+							while(!feof(fh) && fscanf(fh, "%as", &cidr_str))
+							{
+								if(cidr_str == NULL) no_mem(0)
+								ctrl = WALK_CONTINUE;
+								if(cidr_str[0] == '#')
+								{
+									/* ignore the rest of the line */
+									slurp_eol(fh);
+								}
+								else if(strToCidr(cidr_str, cidr))
+								{
+									ctrl = callback_func(WALK_CIDR_FOUND, compound_alias, cidr, callback_data);
+								}
+								else
+								{
+									errx(EXIT_PARSE_ERROR, "failed to parse cidr '%s'", cidr_str);
+								}
+								
+								free(cidr_str);
+								if(ctrl == WALK_RETURN) break;
+								else if(ctrl == WALK_NEXT_ALIAS) break;
+								else if(ctrl == WALK_CONTINUE);
+								else errx(EXIT_SYS_ERROR, "Unknown callback code: %d", ctrl);
+							}
+							file_close(fh);
+						}
+						else
+						{
+							errx(EXIT_SYS_ERROR, "Unknown callback code: %d", ctrl);
+						}
+						
+						next_file:
+						free(compound_alias);
+						if(ctrl == WALK_RETURN) break;
+					}
+					globfree(&search_result);
+					if(ctrl == WALK_RETURN) break;
+					if(scan_mode == SCAN_SUFFIX && ctrl == WALK_NEXT_ALIAS) ctrl = WALK_CONTINUE;
+				}
+			}
 		}
-		free(subnet_list);
+		
+		
+		if(event != WALK_NONE)
+		{
+			ctrl = callback_func(event, token_buf, cidr, callback_data);
+		}
+		
+		
+		if(ctrl == WALK_CONTINUE) /* no-op */;
+		else if(ctrl == WALK_NEXT_ALIAS)
+		{
+			if(tokens == 1)
+			{
+				/* newline char was not read, read up to the EOL */
+				slurp_eol(cidr_fhnd);
+			}
+			else if(token == 2)
+			{
+				/* newline is read, cidr_fhnd is pointing to the beginning of a new line */
+			}
+		}
+		else if(ctrl == WALK_RETURN) break;
+		else errx(EXIT_SYS_ERROR, "Unknown callback code: %d", ctrl);
+		
+		
+		if(tokens >= 1)
+		{
+			free(token_buf);
+			token_buf = NULL;
+		}
+		if(tokens == 2)
+		{
+			free(current_netname);
+			current_netname = NULL;
+			scan_mode = SCAN_NETNAME;
+		}
 	}
-	else
-	{
-		return IN_NAMED_SUBNET_WRONG;
-	}
-	return IN_NAMED_SUBNET_NO;
+	
+	free(token_buf);
+	free(current_netname);
+	return TRUE;
 }
+
+walk_cidrs_control_t walk_cb_print_if_match(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, void *user_data)
+{
+	switch(event)
+	{
+		case WALK_CIDR_FOUND:
+			if(in_subnet(user_data->addr, *cidr))
+			{
+				printf("%s\n", network_alias);
+				return WALK_NEXT_ALIAS;
+			}
+		break;
+	}
+	return WALK_CONTINUE;
+};
+
+walk_cidrs_control_t walk_cb_stop_if_match(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, void *user_data)
+{
+	switch(event)
+	{
+		case WALK_ALIAS_FOUND:
+			if(!EQ(network_alias, user_data->alias))
+			{
+				return WALK_NEXT_ALIAS;
+			}
+		break;
+		case WALK_CIDR_FOUND:
+			if(in_subnet(user_data->addr, *cidr))
+			{
+				user_data->result = TRUE;
+				return WALK_RETURN;
+			}
+		break;
+	}
+	return WALK_CONTINUE;
+};
 
 
 int main(int argc, char **argv)
 {
-	struct ipaddr addr;
-	int c_arg = 2;
-
-	if((cidr_file = getenv("CIDR_FILE")) == NULL) cidr_file = CIDR_FILE;
-
+	ipaddr_t addr;
+	
 	if(argc > 1)
 	{
 		if(!parseIpStr(argv[1], &addr))
@@ -514,45 +422,65 @@ int main(int argc, char **argv)
 	
 	if(argc == 2)
 	{
-		char netname[NETNAME_MAX_LEN+1];
-		FILE *hnd = file_open(cidr_file);
+		struct callback_data {
+			ipaddr_t addr;
+		};
+		callback_data.addr = addr;
 		
-		while(cidrfile_next_netname(hnd, netname, YESSLURP))
-		{
-			switch(in_named_subnet(addr, netname))
-			{
-				case IN_NAMED_SUBNET_YES:
-					printf("%s\n", netname);
-					break;
-			}
-		}
-		file_close(hnd);
+		walk_cidrs(walk_cb_print_if_match, &callback_data);
 		return EXIT_SUCCESS;
 	}
 	else if(argc > 2)
 	{
-		while(c_arg < argc)
+		struct ipaddr check_cidr;
+		int idx;
+		char **aliases = NULL;
+		int n_aliases = 0;
+		
+		aliases = malloc(sizeof(void*));
+		if(aliases == NULL) no_mem(sizeof(void*));
+		aliases[0] = NULL;
+		
+		/* First check given CIDRs */
+		for(idx = 2; idx < argc; idx++)
 		{
-			struct ipaddr this_cidr;
-			if(strToCidr(argv[c_arg], &this_cidr))
+			if(strToCidr(argv[idx], &check_cidr))
 			{
-				if(in_subnet(addr, this_cidr)) return EXIT_SUCCESS;
+				if(in_subnet(addr, check_cidr))
+				{
+					return EXIT_MATCH;
+				}
 			}
 			else
 			{
-				switch(in_named_subnet(addr, argv[c_arg]))
-				{
-					case IN_NAMED_SUBNET_YES:
-						return EXIT_SUCCESS;
-						break;
-					case IN_NAMED_SUBNET_WRONG:
-						errx(EXIT_UNKNOWN_SUBNET, "Unknown network '%s'", argv[c_arg]);
-						break;
-				}
+				aliases[n_aliases] = argv[idx];
+				n_aliases++;
+				aliases = realloc(aliases, sizeof(void*) * (n_aliases+1));
+				if(aliases == NULL) no_mem(sizeof(void*) * (n_aliases+1));
+				aliases[n_aliases] = NULL;
 			}
-			c_arg++;
 		}
-		return EXIT_FAILURE;
+		
+		if(n_aliases > 0)
+		{
+			struct callback_data {
+				ipaddr_t addr;
+				char **networks;
+				int result;
+			};
+			callback_data.addr = addr;
+			callback_data.networks = aliases;
+			callback_data.result = FALSE;
+			
+			walk_cidrs(walk_cb_stop_if_match, &callback_data);
+			
+			if(callback_data.result)
+			{
+				return EXIT_MATCH;
+			}
+		}
+		
+		return EXIT_NO_MATCH;
 	}
 	else
 	{
@@ -562,17 +490,16 @@ int main(int argc, char **argv)
 "  Subnet definition must be in dotted-decimal (IPv4) or in colon-separated\n"
 "  hexadecimal (IPv6) notation followed by a slash and decimal subnet mask\n"
 "  or one of the well-known network aliases stored in %s.\n"
-"  If no subnet given, it lists all named subnets the address belongs to.\n"
+"  If no subnet given, lists all named subnets the address belongs to.\n"
 "Exit code:\n"
 "  %3d         one of the given subnets contains the address\n"
 "  %3d         none contains the address\n"
-"  %3d         unknown subnet name\n"
 "  %3d         parse error\n"
 "  %3d         internal/system error\n"
 "    *         other error\n"
 "Environment:\n"
 "  CIDR_FILE   path for network aliases file\n",
-			CIDR_FILE, EXIT_SUCCESS, EXIT_FAILURE, EXIT_UNKNOWN_SUBNET, EXIT_PARSE_ERROR, EXIT_SYS_ERROR);
+			CIDR_FILE, EXIT_MATCH, EXIT_NO_MATCH, EXIT_PARSE_ERROR, EXIT_SYS_ERROR);
 	}
 	return EXIT_SYS_ERROR;
 }
