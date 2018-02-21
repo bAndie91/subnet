@@ -187,7 +187,23 @@ bool in_subnet(ipaddr_t addr, ipaddr_r subnet)
 }
 
 
-bool walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, ipaddr_t*, void*), void *callback_data)
+walk_cidrs_control_t walk_cb_all_cidrs(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, void *user_data)
+/* find all CIDRs in a given network alias, then invoke the given callback function */
+{
+	if(event == WALK_ALIAS_FOUND)
+	{
+		if(user_data->found) return WALK_RETURN;
+		if(EQ(network_alias, user_data->lookup_alias)) user_data->found = TRUE;
+		else return WALK_NEXT_ALIAS;
+	}
+	else if(event == WALK_CIDR_FOUND)
+	{
+		return user_data->cb_func(event, user_data->current_alias, cidr, user_data->cb_data);
+	}
+	return WALK_CONTINUE;
+}
+
+void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, ipaddr_t*, void*), void *callback_data)
 {
 	char *cidr_file;
 	char *token_buf = NULL;
@@ -253,7 +269,20 @@ bool walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 					}
 					else
 					{
-						recurse...
+						struct cb_data {
+							char *lookup_alias;
+							bool found;
+							walk_cidrs_control_t(*cb_func)(walk_cidrs_event_t, char*, ipaddr_t*, void*);
+							void *cb_data;
+							char *current_alias;
+						};
+						cb_data.current_alias = current_netname;
+						cb_data.lookup_alias = token_buf;
+						cb_data.found = FALSE;
+						cb_data.cb_func = callback_func;
+						cb_data.cb_data = callback_data;
+						
+						walk_cidrs(walk_cb_all_cidrs, &cb_data);
 					}
 				}
 				else if(scan_mode == SCAN_SUFFIX)
@@ -368,7 +397,6 @@ bool walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 	
 	free(token_buf);
 	free(current_netname);
-	return TRUE;
 }
 
 walk_cidrs_control_t walk_cb_print_if_match(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, void *user_data)
