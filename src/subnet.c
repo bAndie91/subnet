@@ -14,37 +14,41 @@
 
 
 
-typedef struct ipaddr {
+typedef struct ipaddr_t {
 	int af;
 	struct in_addr ip4;
 	struct in6_addr ip6;
 	int mask;
 } ipaddr_t;
+
 typedef int bool;
 
-enum walk_cidrs_event_t {
-	WALK_NONE;
-	WALK_ALIAS_FOUND;
-	WALK_CIDR_FOUND;
-	WALK_ERROR;
-};
-enum walk_cidrs_control_t {
-	WALK_RETURN;
-	WALK_NEXT_ALIAS;
-	WALK_CONTINUE;
-};
-enum exit_code_t {
-	EXIT_MATCH = EXIT_SUCCESS;
-	EXIT_NO_MATCH = EXIT_FAILURE;
-	EXIT_UNKNOWN_NETWORK;
-	EXIT_PARSE_ERROR;
-	EXIT_SYS_ERROR;
-};
-enum scan_mode_t {
-	SCAN_NETNAME;
-	SCAN_CIDR;
-	SCAN_SUFFIX;
-};
+typedef enum walk_cidrs_event_t {
+	WALK_NONE,
+	WALK_ALIAS_FOUND,
+	WALK_CIDR_FOUND,
+	WALK_ERROR,
+} walk_cidrs_event_t;
+
+typedef enum walk_cidrs_control_t {
+	WALK_RETURN,
+	WALK_NEXT_ALIAS,
+	WALK_CONTINUE,
+} walk_cidrs_control_t;
+
+typedef enum exit_code_t {
+	EXIT_MATCH = EXIT_SUCCESS,
+	EXIT_NO_MATCH = EXIT_FAILURE,
+	EXIT_UNKNOWN_NETWORK,
+	EXIT_PARSE_ERROR,
+	EXIT_SYS_ERROR,
+} exit_code_t;
+
+typedef enum scan_mode_t {
+	SCAN_NETNAME,
+	SCAN_CIDR,
+	SCAN_SUFFIX,
+} scan_mode_t;
 
 
 
@@ -140,7 +144,7 @@ void slurp_eol(FILE *fh)
 }
 
 
-bool in_subnet(ipaddr_t addr, ipaddr_r subnet)
+bool in_subnet(ipaddr_t addr, ipaddr_t subnet)
 {
 	if(addr.af != subnet.af) return FALSE;
 	if(subnet.mask == 0) return TRUE;
@@ -187,7 +191,16 @@ bool in_subnet(ipaddr_t addr, ipaddr_r subnet)
 }
 
 
-walk_cidrs_control_t walk_cb_all_cidrs(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, void *user_data)
+
+struct cb_data_FOR_all_cidrs {
+	char *lookup_alias;
+	bool found;
+	walk_cidrs_control_t(*cb_func)(walk_cidrs_event_t, char*, ipaddr_t*, void*);
+	void *cb_data;
+	char *current_alias;
+};
+
+walk_cidrs_control_t walk_cb_all_cidrs(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, (struct cb_data_FOR_all_cidrs*)user_data)
 /* find all CIDRs in a given network alias, then invoke the given callback function */
 {
 	if(event == WALK_ALIAS_FOUND)
@@ -269,13 +282,8 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 					}
 					else
 					{
-						struct cb_data {
-							char *lookup_alias;
-							bool found;
-							walk_cidrs_control_t(*cb_func)(walk_cidrs_event_t, char*, ipaddr_t*, void*);
-							void *cb_data;
-							char *current_alias;
-						};
+						cb_data_FOR_all_cidrs cb_data;
+						
 						cb_data.current_alias = current_netname;
 						cb_data.lookup_alias = token_buf;
 						cb_data.found = FALSE;
@@ -399,7 +407,12 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 	free(current_netname);
 }
 
-walk_cidrs_control_t walk_cb_print_if_match(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, void *user_data)
+
+struct cb_data_FOR_print_if_match {
+	ipaddr_t addr;
+};
+
+walk_cidrs_control_t walk_cb_print_if_match(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, (struct cb_data_FOR_print_if_match*)user_data)
 {
 	switch(event)
 	{
@@ -414,7 +427,14 @@ walk_cidrs_control_t walk_cb_print_if_match(walk_cidrs_event_t event, char *netw
 	return WALK_CONTINUE;
 };
 
-walk_cidrs_control_t walk_cb_stop_if_match(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, void *user_data)
+
+struct cb_data_FOR_stop_if_match {
+	ipaddr_t addr;
+	char **networks;
+	int result;
+};
+
+walk_cidrs_control_t walk_cb_stop_if_match(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, (struct cb_data_FOR_stop_if_match*)user_data)
 {
 	switch(event)
 	{
@@ -450,12 +470,10 @@ int main(int argc, char **argv)
 	
 	if(argc == 2)
 	{
-		struct callback_data {
-			ipaddr_t addr;
-		};
-		callback_data.addr = addr;
+		struct cb_data_FOR_print_if_match cb_data;
+		cb_data.addr = addr;
 		
-		walk_cidrs(walk_cb_print_if_match, &callback_data);
+		walk_cidrs(walk_cb_print_if_match, &cb_data);
 		return EXIT_SUCCESS;
 	}
 	else if(argc > 2)
@@ -491,16 +509,12 @@ int main(int argc, char **argv)
 		
 		if(n_aliases > 0)
 		{
-			struct callback_data {
-				ipaddr_t addr;
-				char **networks;
-				int result;
-			};
-			callback_data.addr = addr;
-			callback_data.networks = aliases;
-			callback_data.result = FALSE;
+			struct cb_data_FOR_stop_if_match cb_data;
+			cb_data.addr = addr;
+			cb_data.networks = aliases;
+			cb_data.result = FALSE;
 			
-			walk_cidrs(walk_cb_stop_if_match, &callback_data);
+			walk_cidrs(walk_cb_stop_if_match, &cb_data);
 			
 			if(callback_data.result)
 			{
