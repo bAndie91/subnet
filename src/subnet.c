@@ -200,9 +200,11 @@ struct cb_data_FOR_all_cidrs {
 	char *current_alias;
 };
 
-walk_cidrs_control_t walk_cb_all_cidrs(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, (struct cb_data_FOR_all_cidrs*)user_data)
+walk_cidrs_control_t walk_cb_all_cidrs(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, void *user_data_ptr)
 /* find all CIDRs in a given network alias, then invoke the given callback function */
 {
+	struct cb_data_FOR_all_cidrs *user_data = user_data_ptr;
+	
 	if(event == WALK_ALIAS_FOUND)
 	{
 		if(user_data->found) return WALK_RETURN;
@@ -219,11 +221,13 @@ walk_cidrs_control_t walk_cb_all_cidrs(walk_cidrs_event_t event, char *network_a
 void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, ipaddr_t*, void*), void *callback_data)
 {
 	char *cidr_file;
+	FILE *cidr_fhnd;
 	char *token_buf = NULL;
 	char *current_netname = NULL;
 	char lfbuf[2];
 	ipaddr_t cidr;
 	int tokens;
+	walk_cidrs_event_t event;
 	walk_cidrs_control_t ctrl;
 	scan_mode_t scan_mode;
 	bool do_wildcards;
@@ -235,7 +239,7 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 	
 	while(!feof(cidr_fhnd))
 	{
-		tokens = fscanf(cidr_fhnd, "%as%1[\n]", &token_buf, &lfbuf);
+		tokens = fscanf(cidr_fhnd, "%as%1[\n]", &token_buf, (char*)&lfbuf);
 		event = WALK_NONE;
 		ctrl = WALK_CONTINUE;
 		do_wildcards = FALSE;
@@ -276,21 +280,20 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 					{
 						do_wildcards = TRUE;
 					}
-					else if(strToCidr(token_buf, cidr))
+					else if(strToCidr(token_buf, &cidr))
 					{
 						/* a CIDR found, will be passed to callback_func */
 					}
 					else
 					{
-						cb_data_FOR_all_cidrs cb_data;
-						
+						struct cb_data_FOR_all_cidrs cb_data;
 						cb_data.current_alias = current_netname;
 						cb_data.lookup_alias = token_buf;
 						cb_data.found = FALSE;
 						cb_data.cb_func = callback_func;
 						cb_data.cb_data = callback_data;
 						
-						walk_cidrs(walk_cb_all_cidrs, &cb_data);
+						walk_cidrs(walk_cb_all_cidrs, (void*)&cb_data);
 					}
 				}
 				else if(scan_mode == SCAN_SUFFIX)
@@ -412,8 +415,9 @@ struct cb_data_FOR_print_if_match {
 	ipaddr_t addr;
 };
 
-walk_cidrs_control_t walk_cb_print_if_match(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, (struct cb_data_FOR_print_if_match*)user_data)
+walk_cidrs_control_t walk_cb_print_if_match(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, void *user_data_ptr)
 {
+	struct cb_data_FOR_print_if_match *user_data = user_data_ptr;
 	switch(event)
 	{
 		case WALK_CIDR_FOUND:
@@ -434,8 +438,9 @@ struct cb_data_FOR_stop_if_match {
 	int result;
 };
 
-walk_cidrs_control_t walk_cb_stop_if_match(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, (struct cb_data_FOR_stop_if_match*)user_data)
+walk_cidrs_control_t walk_cb_stop_if_match(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, void *user_data_ptr)
 {
+	struct cb_data_FOR_stop_if_match *user_data = user_data_ptr;
 	switch(event)
 	{
 		case WALK_ALIAS_FOUND:
@@ -473,7 +478,7 @@ int main(int argc, char **argv)
 		struct cb_data_FOR_print_if_match cb_data;
 		cb_data.addr = addr;
 		
-		walk_cidrs(walk_cb_print_if_match, &cb_data);
+		walk_cidrs(walk_cb_print_if_match, (void*)&cb_data);
 		return EXIT_SUCCESS;
 	}
 	else if(argc > 2)
@@ -514,7 +519,7 @@ int main(int argc, char **argv)
 			cb_data.networks = aliases;
 			cb_data.result = FALSE;
 			
-			walk_cidrs(walk_cb_stop_if_match, &cb_data);
+			walk_cidrs(walk_cb_stop_if_match, (void*)&cb_data);
 			
 			if(callback_data.result)
 			{
