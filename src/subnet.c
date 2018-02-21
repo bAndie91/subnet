@@ -480,7 +480,7 @@ int main(int argc, char **argv)
 	
 	if(argc > 1)
 	{
-		if(!parseIpStr(argv[1], &addr))
+		if(!parseIpStr(argv[1], addr))
 		{
 			goto usage;
 		}
@@ -496,7 +496,7 @@ int main(int argc, char **argv)
 	}
 	else if(argc > 2)
 	{
-		struct ipaddr check_cidr;
+		ipaddr_t check_cidr;
 		int idx;
 		char **aliases = NULL;
 		int n_aliases = 0;
@@ -508,7 +508,7 @@ int main(int argc, char **argv)
 		/* First check given CIDRs */
 		for(idx = 2; idx < argc; idx++)
 		{
-			if(strToCidr(argv[idx], &check_cidr))
+			if(strToCidr(argv[idx], check_cidr))
 			{
 				if(in_subnet(addr, check_cidr))
 				{
@@ -534,7 +534,7 @@ int main(int argc, char **argv)
 			
 			walk_cidrs(walk_cb_stop_if_match, (void*)&cb_data);
 			
-			if(callback_data.result)
+			if(cb_data.result)
 			{
 				return EXIT_MATCH;
 			}
