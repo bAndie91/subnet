@@ -29,7 +29,7 @@ typedef enum walk_cidrs_event_t {
 	WALK_NONE,
 	WALK_ALIAS_FOUND,
 	WALK_CIDR_FOUND,
-	WALK_ERROR,
+	WALK_ALIAS_END,
 } walk_cidrs_event_t;
 
 typedef enum walk_cidrs_control_t {
@@ -63,9 +63,10 @@ bool EQ(char* a, char* b)
 	return TRUE;
 }
 
-void no_mem(int sz)
+#define MEMORY_EXCEPTION(b) memory_exception((b), __LINE__)
+void memory_exception(int sz, unsigned int lineno)
 {
-	warnx("Could not allocate %u bytes of memory.", sz);
+	warnx("Could not allocate %d bytes of memory, line %d.", sz, lineno);
 	abort();
 }
 
@@ -120,7 +121,7 @@ int strToCidr(const char *str, ipaddr_t *result_cidr)
 {
 	int ok = FALSE;
 	char *tmp = strdup(str);
-	if(tmp == NULL) no_mem(strlen(str));
+	if(tmp == NULL) MEMORY_EXCEPTION(strlen(str));
 	char *ptr = strchr(tmp, '/');
 	if(ptr != NULL)	*ptr = '\0';
 	
@@ -258,8 +259,8 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 		
 		if(tokens >= 1)
 		{
-			if(token_buf == NULL) no_mem(0);
-			warnx("scan_mode %d tokens %d token_buf '%s'", scan_mode, tokens, token_buf);
+			if(token_buf == NULL) MEMORY_EXCEPTION(-1);
+			//warnx("scan_mode %d tokens %d token_buf '%s'", scan_mode, tokens, token_buf);
 			
 			if(strlen(token_buf) == 0 || token_buf[0] == '#')
 			{
@@ -282,7 +283,7 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 						scan_mode = SCAN_CIDR;
 					}
 					
-					if(current_netname == NULL) no_mem(strlen(token_buf));
+					if(current_netname == NULL) MEMORY_EXCEPTION(strlen(token_buf));
 				}
 				else if(scan_mode == SCAN_CIDR)
 				{
@@ -330,18 +331,21 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 					for(n_path = 0; n_path < search_result.gl_pathc; n_path++)
 					{
 						compound_alias = NULL;
-						asprintf(&compound_alias, "%s%s", current_netname, (char*)(strrchr(search_result.gl_pathv[n_path], '/')+1));
-						if(compound_alias == NULL) no_mem(0);
+						if(scan_mode == SCAN_SUFFIX)
+						{
+							asprintf(&compound_alias, "%s%s", current_netname, (char*)(strrchr(search_result.gl_pathv[n_path], '/')+1));
+							if(compound_alias == NULL) MEMORY_EXCEPTION(-1);
+						}
 						
-						ctrl = callback_func(WALK_ALIAS_FOUND, compound_alias, NULL, callback_data);
-						if(ctrl == WALK_RETURN) break;
+						ctrl = callback_func(WALK_ALIAS_FOUND, scan_mode == SCAN_SUFFIX ? compound_alias : current_netname, NULL, callback_data);
+						if(ctrl == WALK_RETURN) goto next_file;
 						else if(ctrl == WALK_NEXT_ALIAS) goto next_file;
 						else if(ctrl == WALK_CONTINUE)
 						{
 							fh = file_open(search_result.gl_pathv[n_path]);
-							while(!feof(fh) && fscanf(fh, "%as", &cidr_str))
+							while(!feof(fh) && fscanf(fh, "%as", &cidr_str)>=1)
 							{
-								if(cidr_str == NULL) no_mem(0);
+								if(cidr_str == NULL) MEMORY_EXCEPTION(-1);
 								ctrl = WALK_CONTINUE;
 								if(cidr_str[0] == '#')
 								{
@@ -350,7 +354,7 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 								}
 								else if(strToCidr(cidr_str, &cidr))
 								{
-									ctrl = callback_func(WALK_CIDR_FOUND, compound_alias, &cidr, callback_data);
+									ctrl = callback_func(WALK_CIDR_FOUND, scan_mode == SCAN_SUFFIX ? compound_alias : current_netname, &cidr, callback_data);
 								}
 								else
 								{
@@ -360,7 +364,7 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 								free(cidr_str);
 								if(ctrl == WALK_RETURN) break;
 								else if(ctrl == WALK_NEXT_ALIAS) break;
-								else if(ctrl == WALK_CONTINUE);
+								else if(ctrl == WALK_CONTINUE) /* no-op */;
 								else errx(EXIT_SYS_ERROR, "Unknown callback code: %d", ctrl);
 							}
 							file_close(fh);
@@ -384,11 +388,20 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 		
 		if(event != WALK_NONE)
 		{
-			ctrl = callback_func(event, token_buf, &cidr, callback_data);
+			ctrl = callback_func(event, current_netname, &cidr, callback_data);
 		}
 		
 		
-		if(ctrl == WALK_CONTINUE) /* no-op */;
+		if(ctrl == WALK_CONTINUE)
+		{
+			if(was_eol)
+			{
+				walk_cidrs_control_t ctrl2 = callback_func(WALK_ALIAS_END, token_buf, &cidr, callback_data);
+				if(ctrl2 == WALK_RETURN) break;
+				else if(ctrl2 == WALK_CONTINUE) /* no-op */;
+				else errx(EXIT_SYS_ERROR, "Unknown callback code: %d", ctrl2);
+			}
+		}
 		else if(ctrl == WALK_NEXT_ALIAS)
 		{
 			if(!was_eol)
@@ -420,6 +433,7 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 	
 	free(token_buf);
 	free(current_netname);
+	file_close(cidr_fhnd);
 }
 
 
@@ -455,10 +469,21 @@ walk_cidrs_control_t walk_cb_stop_if_match(walk_cidrs_event_t event, char *netwo
 	
 	if(event == WALK_ALIAS_FOUND)
 	{
+		if(user_data->networks[0] == NULL)
+		{
+			/* there are no more Network to check */
+			return WALK_RETURN;
+		}
 		for(idx = 0; user_data->networks[idx] != NULL; idx++)
 		{
 			if(EQ(network_alias, user_data->networks[idx]))
 			{
+				/* shift list back by one slot */
+				for(; user_data->networks[idx] != NULL; idx++)
+				{
+					user_data->networks[idx] = user_data->networks[idx+1];
+				}
+				/* indicate that we want to get CIDRs of this Network */
 				return WALK_CONTINUE;
 			}
 		}
@@ -468,6 +493,7 @@ walk_cidrs_control_t walk_cb_stop_if_match(walk_cidrs_event_t event, char *netwo
 	{
 		if(in_subnet(user_data->addr, *cidr))
 		{
+			/* found a match */
 			user_data->result = TRUE;
 			return WALK_RETURN;
 		}
@@ -504,7 +530,7 @@ int main(int argc, char **argv)
 		int n_aliases = 0;
 		
 		aliases = malloc(sizeof(void*));
-		if(aliases == NULL) no_mem(sizeof(void*));
+		if(aliases == NULL) MEMORY_EXCEPTION(sizeof(void*));
 		aliases[0] = NULL;
 		
 		/* First check given CIDRs */
@@ -522,7 +548,7 @@ int main(int argc, char **argv)
 				aliases[n_aliases] = argv[idx];
 				n_aliases++;
 				aliases = realloc(aliases, sizeof(void*) * (n_aliases+1));
-				if(aliases == NULL) no_mem(sizeof(void*) * (n_aliases+1));
+				if(aliases == NULL) MEMORY_EXCEPTION(sizeof(void*) * (n_aliases+1));
 				aliases[n_aliases] = NULL;
 			}
 		}
