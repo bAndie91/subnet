@@ -69,6 +69,22 @@ void memory_exception(int sz, unsigned int lineno)
 	warnx("Could not allocate %d bytes of memory, line %d.", sz, lineno);
 	abort();
 }
+#define MALLOC(b) abrealloc(NULL, (b), __LINE__)
+#define REALLOC(p, b) abrealloc((p), (b), __LINE__)
+void *abrealloc(void *old_ptr, int sz, unsigned int lineno)
+{
+	void *ptr = realloc(old_ptr, sz);
+	if(ptr == NULL) memory_exception(sz, lineno);
+	return ptr;
+}
+#define STRDUP(p) abstrdup((p), __LINE__)
+char *abstrdup(const char *ptr, unsigned int lineno)
+{
+	char *dup = strdup(ptr);
+	if(dup == NULL) memory_exception(strlen(ptr), lineno);
+	return dup;
+}
+
 
 int glob_error(const char *epath, int eerrno)
 {
@@ -120,8 +136,7 @@ int parseIpStr(const char *str, ipaddr_t *addr)
 int strToCidr(const char *str, ipaddr_t *result_cidr)
 {
 	int ok = FALSE;
-	char *tmp = strdup(str);
-	if(tmp == NULL) MEMORY_EXCEPTION(strlen(str));
+	char *tmp = STRDUP(str);
 	char *ptr = strchr(tmp, '/');
 	if(ptr != NULL)	*ptr = '\0';
 	
@@ -204,11 +219,10 @@ bool in_subnet(ipaddr_t addr, ipaddr_t subnet)
 
 
 struct cb_data_FOR_all_cidrs {
-	char *lookup_alias;
-	bool found;
-	walk_cidrs_control_t(*cb_func)(walk_cidrs_event_t, char*, ipaddr_t*, void*);
-	void *cb_data;
-	char *current_alias;
+	char *lookup_alias;  /* seek for this sepcific network name */
+	walk_cidrs_control_t(*cb_func)(walk_cidrs_event_t, char*, ipaddr_t*, void*);  /* next level callback function called on each CIDR found */
+	void *cb_data;  /* pointer passed to next level callback */
+	char *current_alias;  /* pass this as network name to the next level callback */
 };
 
 walk_cidrs_control_t walk_cb_all_cidrs(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, void *user_data_ptr)
@@ -218,13 +232,16 @@ walk_cidrs_control_t walk_cb_all_cidrs(walk_cidrs_event_t event, char *network_a
 	
 	if(event == WALK_ALIAS_FOUND)
 	{
-		if(user_data->found) return WALK_RETURN;
-		if(EQ(network_alias, user_data->lookup_alias)) user_data->found = TRUE;
+		if(EQ(network_alias, user_data->lookup_alias)) return WALK_CONTINUE;
 		else return WALK_NEXT_ALIAS;
 	}
 	else if(event == WALK_CIDR_FOUND)
 	{
 		return user_data->cb_func(event, user_data->current_alias, cidr, user_data->cb_data);
+	}
+	else if(event == WALK_ALIAS_END)
+	{
+		return WALK_RETURN;
 	}
 	return WALK_CONTINUE;
 }
@@ -273,17 +290,15 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 				{
 					if(token_buf[0] == '^')
 					{
-						current_netname = strdup((char*)(token_buf+1));
+						current_netname = STRDUP((char*)(token_buf+1));
 						scan_mode = SCAN_SUFFIX;
 					}
 					else
 					{
 						event = WALK_ALIAS_FOUND;
-						current_netname = strdup(token_buf);
+						current_netname = STRDUP(token_buf);
 						scan_mode = SCAN_CIDR;
 					}
-					
-					if(current_netname == NULL) MEMORY_EXCEPTION(strlen(token_buf));
 				}
 				else if(scan_mode == SCAN_CIDR)
 				{
@@ -302,7 +317,6 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 						struct cb_data_FOR_all_cidrs cb_data;
 						cb_data.current_alias = current_netname;
 						cb_data.lookup_alias = token_buf;
-						cb_data.found = FALSE;
 						cb_data.cb_func = callback_func;
 						cb_data.cb_data = callback_data;
 						
@@ -333,8 +347,9 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 						compound_alias = NULL;
 						if(scan_mode == SCAN_SUFFIX)
 						{
-							asprintf(&compound_alias, "%s%s", current_netname, (char*)(strrchr(search_result.gl_pathv[n_path], '/')+1));
-							if(compound_alias == NULL) MEMORY_EXCEPTION(-1);
+							char *suffix = strrchr(search_result.gl_pathv[n_path], '/') + 1;
+							asprintf(&compound_alias, "%s%s", current_netname, suffix);
+							if(compound_alias == NULL) MEMORY_EXCEPTION(strlen(current_netname) + strlen(suffix));
 						}
 						
 						ctrl = callback_func(WALK_ALIAS_FOUND, scan_mode == SCAN_SUFFIX ? compound_alias : current_netname, NULL, callback_data);
@@ -458,7 +473,8 @@ walk_cidrs_control_t walk_cb_print_if_match(walk_cidrs_event_t event, char *netw
 
 struct cb_data_FOR_stop_if_match {
 	ipaddr_t addr;
-	char **networks;  /* NULL-terminted list */
+	char **networks;  /* NULL-terminted list, freed by caller */
+	bool *networks_hit;  /* "networks"-sized, not terminated by NULL, freed by caller */
 	int result;
 };
 
@@ -476,13 +492,10 @@ walk_cidrs_control_t walk_cb_stop_if_match(walk_cidrs_event_t event, char *netwo
 		}
 		for(idx = 0; user_data->networks[idx] != NULL; idx++)
 		{
-			if(EQ(network_alias, user_data->networks[idx]))
+			if(user_data->networks_hit[idx] == FALSE && EQ(network_alias, user_data->networks[idx]))
 			{
-				/* shift list back by one slot */
-				for(; user_data->networks[idx] != NULL; idx++)
-				{
-					user_data->networks[idx] = user_data->networks[idx+1];
-				}
+				/* exclude this network name from future processing */
+				user_data->networks_hit[idx] = TRUE;
 				/* indicate that we want to get CIDRs of this Network */
 				return WALK_CONTINUE;
 			}
@@ -525,13 +538,10 @@ int main(int argc, char **argv)
 	else if(argc > 2)
 	{
 		ipaddr_t check_cidr;
-		int idx;
+		size_t idx;
 		char **aliases = NULL;
 		int n_aliases = 0;
 		
-		aliases = malloc(sizeof(void*));
-		if(aliases == NULL) MEMORY_EXCEPTION(sizeof(void*));
-		aliases[0] = NULL;
 		
 		/* First check given CIDRs */
 		for(idx = 2; idx < argc; idx++)
@@ -545,10 +555,9 @@ int main(int argc, char **argv)
 			}
 			else
 			{
-				aliases[n_aliases] = argv[idx];
 				n_aliases++;
-				aliases = realloc(aliases, sizeof(void*) * (n_aliases+1));
-				if(aliases == NULL) MEMORY_EXCEPTION(sizeof(void*) * (n_aliases+1));
+				aliases = REALLOC(aliases, sizeof(void*) * n_aliases);
+				aliases[n_aliases-1] = argv[idx];
 				aliases[n_aliases] = NULL;
 			}
 		}
@@ -559,6 +568,8 @@ int main(int argc, char **argv)
 			cb_data.addr = addr;
 			cb_data.networks = aliases;
 			cb_data.result = FALSE;
+			cb_data.networks_hit = MALLOC(sizeof(bool) * n_aliases);
+			for(idx = 0; idx < n_aliases; idx++) cb_data.networks_hit[idx] = FALSE;
 			
 			walk_cidrs(walk_cb_stop_if_match, (void*)&cb_data);
 			
@@ -566,7 +577,17 @@ int main(int argc, char **argv)
 			{
 				return EXIT_MATCH;
 			}
+			else
+			{
+				for(idx = 0; idx < n_aliases; idx++)
+				{
+					if(!cb_data.networks_hit[idx]) warnx("Unknown netwrok: %s", cb_data.networks[idx]);
+				}
+			}
+			
+			// free(cb_data.networks_hit)
 		}
+		// free(aliases)
 		
 		return EXIT_NO_MATCH;
 	}
@@ -581,7 +602,7 @@ int main(int argc, char **argv)
 "  If no subnet given, lists all named subnets the address belongs to.\n"
 "Exit code:\n"
 "  %3d         one of the given subnets contains the address\n"
-"  %3d         none contains the address\n"
+"  %3d         none of subnets contain the address\n"
 "  %3d         parse error\n"
 "  %3d         internal/system error\n"
 "    *         other error\n"
