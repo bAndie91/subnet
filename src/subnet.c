@@ -64,21 +64,21 @@ bool EQ(char* a, char* b)
 }
 
 #define MEMORY_EXCEPTION(b) memory_exception((b), __LINE__)
-void memory_exception(int sz, unsigned int lineno)
+void memory_exception(const int sz, const unsigned int lineno)
 {
 	warnx("Could not allocate %d bytes of memory, line %d.", sz, lineno);
 	abort();
 }
 #define MALLOC(b) abrealloc(NULL, (b), __LINE__)
 #define REALLOC(p, b) abrealloc((p), (b), __LINE__)
-void *abrealloc(void *old_ptr, int sz, unsigned int lineno)
+void *abrealloc(const void *old_ptr, const int sz, const unsigned int lineno)
 {
-	void *ptr = realloc(old_ptr, sz);
+	void *ptr = realloc((void*)old_ptr, sz);
 	if(ptr == NULL) memory_exception(sz, lineno);
 	return ptr;
 }
 #define STRDUP(p) abstrdup((p), __LINE__)
-char *abstrdup(const char *ptr, unsigned int lineno)
+char *abstrdup(const char *ptr, const unsigned int lineno)
 {
 	char *dup = strdup(ptr);
 	if(dup == NULL) memory_exception(strlen(ptr), lineno);
@@ -170,7 +170,7 @@ void slurp_eol(FILE *fh)
 }
 
 
-bool in_subnet(ipaddr_t addr, ipaddr_t subnet)
+bool in_subnet(const ipaddr_t addr, const ipaddr_t subnet)
 {
 	if(addr.af != subnet.af) return FALSE;
 	if(subnet.mask == 0) return TRUE;
@@ -529,10 +529,10 @@ int main(int argc, char **argv)
 	
 	if(argc == 2)
 	{
-		struct cb_data_FOR_print_if_match cb_data;
-		cb_data.addr = addr;
+		struct cb_data_FOR_print_if_match cb_data_printer;
+		cb_data_printer.addr = addr;
 		
-		walk_cidrs(walk_cb_print_if_match, (void*)&cb_data);
+		walk_cidrs(walk_cb_print_if_match, (void*)&cb_data_printer);
 		return EXIT_SUCCESS;
 	}
 	else if(argc > 2)
@@ -541,7 +541,6 @@ int main(int argc, char **argv)
 		size_t idx;
 		char **aliases = NULL;
 		int n_aliases = 0;
-		
 		
 		/* First check given CIDRs */
 		for(idx = 2; idx < argc; idx++)
@@ -555,8 +554,9 @@ int main(int argc, char **argv)
 			}
 			else
 			{
+				/* does not look like a CIDR, append it to the list of network names */
 				n_aliases++;
-				aliases = REALLOC(aliases, sizeof(void*) * n_aliases);
+				aliases = REALLOC(aliases, (n_aliases+1) * sizeof(void*));
 				aliases[n_aliases-1] = argv[idx];
 				aliases[n_aliases] = NULL;
 			}
@@ -564,16 +564,16 @@ int main(int argc, char **argv)
 		
 		if(n_aliases > 0)
 		{
-			struct cb_data_FOR_stop_if_match cb_data;
-			cb_data.addr = addr;
-			cb_data.networks = aliases;
-			cb_data.result = FALSE;
-			cb_data.networks_hit = MALLOC(sizeof(bool) * n_aliases);
-			for(idx = 0; idx < n_aliases; idx++) cb_data.networks_hit[idx] = FALSE;
+			struct cb_data_FOR_stop_if_match cb_data_stopper;
+			cb_data_stopper.addr = addr;
+			cb_data_stopper.networks = aliases;
+			cb_data_stopper.result = FALSE;
+			cb_data_stopper.networks_hit = MALLOC(n_aliases * sizeof(bool));
+			for(idx = 0; idx < n_aliases; idx++) cb_data_stopper.networks_hit[idx] = FALSE;
 			
-			walk_cidrs(walk_cb_stop_if_match, (void*)&cb_data);
+			walk_cidrs(walk_cb_stop_if_match, (void*)&cb_data_stopper);
 			
-			if(cb_data.result)
+			if(cb_data_stopper.result)
 			{
 				return EXIT_MATCH;
 			}
@@ -581,11 +581,14 @@ int main(int argc, char **argv)
 			{
 				for(idx = 0; idx < n_aliases; idx++)
 				{
-					if(!cb_data.networks_hit[idx]) warnx("Unknown netwrok: %s", cb_data.networks[idx]);
+					if(!cb_data_stopper.networks_hit[idx])
+					{
+						warnx("Unknown netwrok: %s", cb_data_stopper.networks[idx]);
+					}
 				}
 			}
 			
-			// free(cb_data.networks_hit)
+			// free(cb_data_stopper.networks_hit)
 		}
 		// free(aliases)
 		
