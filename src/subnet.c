@@ -13,6 +13,7 @@
 #define ADDRLEN_BY_AF(x) ( (((x) == AF_INET) ? sizeof(struct in_addr) : ((x) == AF_INET6) ? sizeof(struct in6_addr) : 0)*8 )
 #define TRUE 1
 #define FALSE 0
+#define MSG_INVALID_CB_CODE "Invalid callback code: %d"
 
 
 
@@ -302,8 +303,6 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 				}
 				else if(scan_mode == SCAN_CIDR)
 				{
-					event = WALK_CIDR_FOUND;
-					
 					if(token_buf[0] == '/' || token_buf[0] == '.')
 					{
 						do_wildcards = TRUE;
@@ -311,9 +310,12 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 					else if(strToCidr(token_buf, &cidr))
 					{
 						/* a CIDR found, will be passed to callback_func */
+						event = WALK_CIDR_FOUND;
 					}
 					else
 					{
+						/* probaby a nested alias name, go recursively */
+						
 						struct cb_data_FOR_all_cidrs cb_data;
 						cb_data.current_alias = current_netname;
 						cb_data.lookup_alias = token_buf;
@@ -334,14 +336,13 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 					search_result.gl_offs = 0;
 					size_t n_path;
 					char *compound_alias;
+					char *reported_alias = current_netname;
 					FILE *fh;
 					char *cidr_str;
 					
 					int search = glob(token_buf, GLOB_ERR | GLOB_NOSORT, glob_error, &search_result);
-					if(search != 0 && search != GLOB_NOMATCH)
-					{
-						errx(EXIT_SYS_ERROR, "glob error at '%s'", token_buf);
-					}
+					if(search != 0 && search != GLOB_NOMATCH) errx(EXIT_SYS_ERROR, "glob error at '%s'", token_buf);
+					
 					for(n_path = 0; n_path < search_result.gl_pathc; n_path++)
 					{
 						compound_alias = NULL;
@@ -350,10 +351,12 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 							char *suffix = strrchr(search_result.gl_pathv[n_path], '/') + 1;
 							asprintf(&compound_alias, "%s%s", current_netname, suffix);
 							if(compound_alias == NULL) MEMORY_EXCEPTION(strlen(current_netname) + strlen(suffix));
+							reported_alias = compound_alias;
 						}
 						
-						ctrl = callback_func(WALK_ALIAS_FOUND, scan_mode == SCAN_SUFFIX ? compound_alias : current_netname, NULL, callback_data);
-						if(ctrl == WALK_RETURN) goto next_file;
+						ctrl = callback_func(WALK_ALIAS_FOUND, reported_alias, NULL, callback_data);
+						
+						if(ctrl == WALK_RETURN) goto return_from_globbing;
 						else if(ctrl == WALK_NEXT_ALIAS) goto next_file;
 						else if(ctrl == WALK_CONTINUE)
 						{
@@ -369,7 +372,7 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 								}
 								else if(strToCidr(cidr_str, &cidr))
 								{
-									ctrl = callback_func(WALK_CIDR_FOUND, scan_mode == SCAN_SUFFIX ? compound_alias : current_netname, &cidr, callback_data);
+									ctrl = callback_func(WALK_CIDR_FOUND, reported_alias, &cidr, callback_data);
 								}
 								else
 								{
@@ -380,22 +383,32 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 								if(ctrl == WALK_RETURN) break;
 								else if(ctrl == WALK_NEXT_ALIAS) break;
 								else if(ctrl == WALK_CONTINUE) /* no-op */;
-								else errx(EXIT_SYS_ERROR, "Unknown callback code: %d", ctrl);
+								else errx(EXIT_SYS_ERROR, MSG_INVALID_CB_CODE, ctrl);
 							}
 							file_close(fh);
+							
+							if(scan_mode == SCAN_SUFFIX)
+							{
+								ctrl = callback_func(WALK_ALIAS_END, reported_alias, NULL, callback_data);
+								if(ctrl == WALK_RETURN) goto return_from_globbing;
+								else if(ctrl == WALK_CONTINUE) /* no-op */;
+								else errx(EXIT_SYS_ERROR, MSG_INVALID_CB_CODE, ctrl);
+							}
 						}
 						else
 						{
-							errx(EXIT_SYS_ERROR, "Unknown callback code: %d", ctrl);
+							errx(EXIT_SYS_ERROR, MSG_INVALID_CB_CODE, ctrl);
 						}
 						
 						next_file:
+						return_from_globbing:
 						free(compound_alias);
 						if(ctrl == WALK_RETURN) break;
+						if(ctrl == WALK_NEXT_ALIAS && scan_mode != SCAN_SUFFIX) break;
 					}
 					globfree(&search_result);
 					if(ctrl == WALK_RETURN) break;
-					if(scan_mode == SCAN_SUFFIX && ctrl == WALK_NEXT_ALIAS) ctrl = WALK_CONTINUE;
+					if(ctrl == WALK_NEXT_ALIAS && scan_mode == SCAN_SUFFIX) ctrl = WALK_CONTINUE;
 				}
 			}
 		}
@@ -414,7 +427,7 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 				walk_cidrs_control_t ctrl2 = callback_func(WALK_ALIAS_END, token_buf, &cidr, callback_data);
 				if(ctrl2 == WALK_RETURN) break;
 				else if(ctrl2 == WALK_CONTINUE) /* no-op */;
-				else errx(EXIT_SYS_ERROR, "Unknown callback code: %d", ctrl2);
+				else errx(EXIT_SYS_ERROR, MSG_INVALID_CB_CODE, ctrl2);
 			}
 		}
 		else if(ctrl == WALK_NEXT_ALIAS)
@@ -429,7 +442,7 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 			}
 		}
 		else if(ctrl == WALK_RETURN) break;
-		else errx(EXIT_SYS_ERROR, "Unknown callback code: %d", ctrl);
+		else errx(EXIT_SYS_ERROR, MSG_INVALID_CB_CODE, ctrl);
 		
 		
 		if(tokens >= 1)
