@@ -65,4 +65,7 @@ link-local		fe80::/10
 multicast-ipv6		ff00::/8
 
 
-AMPRNet			44.0.0.0/8
+amprnet			44.0.0.0/8
+cloudflare		/var/cache/subnet/cloudflare-v4 /var/cache/subnet/cloudflare-v6
+aws				/var/cache/subnet/amazonaws/ip-ranges-v4 /var/cache/subnet/amazonaws/ip-ranges-v6
+^aws-			/var/cache/subnet/amazonaws/service/* /var/cache/subnet/amazonaws/region/*
