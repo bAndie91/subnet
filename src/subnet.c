@@ -14,6 +14,7 @@
 #define TRUE 1
 #define FALSE 0
 #define MSG_INVALID_CB_CODE "Invalid callback code: %d"
+#define SIZEOF_POINTER (sizeof(void*))
 
 
 
@@ -28,6 +29,7 @@ typedef int bool;
 
 typedef enum walk_cidrs_event_t {
 	WALK_NONE,
+	WALK_INIT,
 	WALK_ALIAS_FOUND,
 	WALK_CIDR_FOUND,
 	WALK_ALIAS_END,
@@ -65,6 +67,8 @@ bool EQ(char* a, char* b)
 }
 
 #define MEMORY_EXCEPTION(b) memory_exception((b), __LINE__)
+void memory_exception(const int, const unsigned int)
+ __attribute__((cold, noreturn));
 void memory_exception(const int sz, const unsigned int lineno)
 {
 	warnx("Could not allocate %d bytes of memory, line %d.", sz, lineno);
@@ -72,6 +76,8 @@ void memory_exception(const int sz, const unsigned int lineno)
 }
 #define MALLOC(b) abrealloc(NULL, (b), __LINE__)
 #define REALLOC(p, b) abrealloc((p), (b), __LINE__)
+void *abrealloc(const void *, const int, const unsigned int)
+ __attribute__((malloc));
 void *abrealloc(const void *old_ptr, const int sz, const unsigned int lineno)
 {
 	void *ptr = realloc((void*)old_ptr, sz);
@@ -79,6 +85,8 @@ void *abrealloc(const void *old_ptr, const int sz, const unsigned int lineno)
 	return ptr;
 }
 #define STRDUP(p) abstrdup((p), __LINE__)
+char *abstrdup(const char *, const unsigned int)
+  __attribute__((malloc));
 char *abstrdup(const char *ptr, const unsigned int lineno)
 {
 	char *dup = strdup(ptr);
@@ -87,6 +95,8 @@ char *abstrdup(const char *ptr, const unsigned int lineno)
 }
 
 
+int glob_error(const char *, int)
+ __attribute__((cold));
 int glob_error(const char *epath, int eerrno)
 {
 	warn("glob: %s", epath);
@@ -224,6 +234,7 @@ struct cb_data_FOR_all_cidrs {
 	walk_cidrs_control_t(*cb_func)(walk_cidrs_event_t, char*, ipaddr_t*, void*);  /* next level callback function called on each CIDR found */
 	void *cb_data;  /* pointer passed to next level callback */
 	char *current_alias;  /* pass this as network name to the next level callback */
+	char **stack_of_aliases;
 };
 
 walk_cidrs_control_t walk_cb_all_cidrs(walk_cidrs_event_t event, char *network_alias, ipaddr_t *cidr, void *user_data_ptr)
@@ -266,6 +277,9 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 	
 	cidr_fhnd = file_open(cidr_file);
 	scan_mode = SCAN_NETNAME;
+	
+	ctrl = callback_func(WALK_INIT, NULL, NULL, callback_data);
+	if(ctrl == WALK_RETURN) goto end_walk_cidrs;
 	
 	while(!feof(cidr_fhnd))
 	{
@@ -315,14 +329,56 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 					else
 					{
 						/* probaby a nested alias name, go recursively */
+						struct cb_data_FOR_all_cidrs cb_data = {
+							.lookup_alias = token_buf,
+							.current_alias = current_netname,
+							.stack_of_aliases = NULL,
+							.cb_func = callback_func,
+							.cb_data = callback_data,
+						};
+						struct cb_data_FOR_all_cidrs *my_cb_data;
+						int idx = 0;
+						char **stack_of_aliases = NULL;
 						
-						struct cb_data_FOR_all_cidrs cb_data;
-						cb_data.current_alias = current_netname;
-						cb_data.lookup_alias = token_buf;
-						cb_data.cb_func = callback_func;
-						cb_data.cb_data = callback_data;
+						/* detect recursion loop */
+						if(callback_func == walk_cb_all_cidrs)
+						{
+							my_cb_data = (struct cb_data_FOR_all_cidrs *)callback_data;
+							stack_of_aliases = my_cb_data->stack_of_aliases;
+							
+							for(idx = 0; stack_of_aliases[idx] != NULL; idx++)
+							{
+								if(EQ(stack_of_aliases[idx], cb_data.lookup_alias))
+								{
+									/* display path of loop */
+									int idx2;
+									for(idx2 = 0; stack_of_aliases[idx2] != NULL; idx2++) fprintf(stderr, "'%s' -> ", stack_of_aliases[idx2]);
+									fprintf(stderr, "'%s' -> '%s'\n", cb_data.current_alias, cb_data.lookup_alias);
+									errx(EXIT_PARSE_ERROR, "Recursion loop detected.");
+								}
+							}
+						}
+						
+						/* save the network name currenly being processed */
+						stack_of_aliases = REALLOC(stack_of_aliases, (idx+2) * SIZEOF_POINTER);
+						stack_of_aliases[idx] = cb_data.current_alias;
+						stack_of_aliases[idx+1] = NULL;
+						cb_data.stack_of_aliases = stack_of_aliases;
+						/* save new pointer of enlarged area of alias pointers to caller's userdata */
+						if(callback_func == walk_cb_all_cidrs) my_cb_data->stack_of_aliases = stack_of_aliases;
 						
 						walk_cidrs(walk_cb_all_cidrs, (void*)&cb_data);
+						
+						if(callback_func != walk_cb_all_cidrs)
+						{
+							free(stack_of_aliases);
+						}
+						else
+						{
+							/* remove the pointer to the most recently processed alias */
+							stack_of_aliases[idx] = NULL;
+							/* leave area of alias pointers as large as it is */
+						}
 					}
 				}
 				else if(scan_mode == SCAN_SUFFIX)
@@ -459,6 +515,7 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 		}
 	}
 	
+	end_walk_cidrs:
 	free(token_buf);
 	free(current_netname);
 	file_close(cidr_fhnd);
@@ -542,8 +599,9 @@ int main(int argc, char **argv)
 	
 	if(argc == 2)
 	{
-		struct cb_data_FOR_print_if_match cb_data_printer;
-		cb_data_printer.addr = addr;
+		struct cb_data_FOR_print_if_match cb_data_printer = {
+			.addr = addr,
+		};
 		
 		walk_cidrs(walk_cb_print_if_match, (void*)&cb_data_printer);
 		return EXIT_SUCCESS;
@@ -569,7 +627,7 @@ int main(int argc, char **argv)
 			{
 				/* does not look like a CIDR, append it to the list of network names */
 				n_aliases++;
-				aliases = REALLOC(aliases, (n_aliases+1) * sizeof(void*));
+				aliases = REALLOC(aliases, (n_aliases+1) * SIZEOF_POINTER);
 				aliases[n_aliases-1] = argv[idx];
 				aliases[n_aliases] = NULL;
 			}
@@ -577,10 +635,13 @@ int main(int argc, char **argv)
 		
 		if(n_aliases > 0)
 		{
-			struct cb_data_FOR_stop_if_match cb_data_stopper;
-			cb_data_stopper.addr = addr;
-			cb_data_stopper.networks = aliases;
-			cb_data_stopper.result = FALSE;
+			struct cb_data_FOR_stop_if_match cb_data_stopper = {
+				.addr = addr,
+				.networks = aliases,
+				.result = FALSE,
+				.networks_hit = NULL,
+			};
+			
 			cb_data_stopper.networks_hit = MALLOC(n_aliases * sizeof(bool));
 			for(idx = 0; idx < n_aliases; idx++) cb_data_stopper.networks_hit[idx] = FALSE;
 			
