@@ -62,6 +62,7 @@ documentation-ipv6	2001:db8::/32
 
 unique-local		fc00::/7
 link-local		fe80::/10
+site-local		fec0::/10
 multicast-ipv6		ff00::/8
 
 
