@@ -9,6 +9,7 @@ class-A			0.0.0.0/1
 priv-class-A		10.0.0.0/8
 
 rfc6598			100.64.0.0/10
+shared-address-space rfc6598
 loopback		loopback-ipv4 loopback-ipv6
 loopback-ipv4		127.0.0.0/8
 
@@ -62,7 +63,6 @@ documentation-ipv6	2001:db8::/32
 
 unique-local		fc00::/7
 link-local		fe80::/10
-site-local		fec0::/10
 multicast-ipv6		ff00::/8
 
 
