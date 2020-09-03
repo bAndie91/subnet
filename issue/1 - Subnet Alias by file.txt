@@ -1,0 +1,1 @@
+search subnet alias names in a specific directory, eg. `/etc/cidr.d/ALIAS`.
