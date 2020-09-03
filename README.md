@@ -29,3 +29,6 @@ Examples
     priv-class-A
     ```
 
+
+# issues
+Please submit issues via PR to some file `issue/TITLE.txt`.
