@@ -1,0 +1,5 @@
+- include a whole subnet-spec file,
+eg. `!/usr/local/etc/cidr`
+
+- read only CIDRs from files, alias name becomes a prefix,
+eg. `aws- !/var/cache/subnet/amazonaws/region/* !/var/cache/subnet/amazonaws/service/*` would provide aliases like `aws-EC2`, `aws-us-west-2`
