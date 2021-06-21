@@ -56,6 +56,7 @@ rfc6052			64:ff9b::/96
 teredo			2001::/32
 rfc4380			teredo
 6to4			2002::/16
+yggdrasil		0200::/4
 
 orchid			2001:10::/28
 orchid2			2001:20::/28
@@ -63,6 +64,7 @@ documentation-ipv6	2001:db8::/32
 
 unique-local		fc00::/7
 link-local		fe80::/10
+site-local		fec0::/10
 multicast-ipv6		ff00::/8
 
 
