@@ -1,0 +1,1 @@
+{"author":{"id":"5522016dac562ff96e61c1537b3fe2fcc226023d9e14992a8d68207a5a3a085f"},"ops":[{"type":1,"timestamp":1737390600,"nonce":"fok0BIkvuPwB8P9FNRm+3J7yW94=","title":"Subnet Alias by file","message":"Date: 2020-09-15 23:18\nsearch subnet alias names in a specific directory, eg. `/etc/cidr.d/ALIAS`.","files":null}]}
