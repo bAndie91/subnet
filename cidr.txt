@@ -57,7 +57,7 @@ rfc6052			64:ff9b::/96
 teredo			2001::/32
 rfc4380			teredo
 6to4			2002::/16
-yggdrasil		0200::/4
+yggdrasil		0200::/7
 
 orchid			2001:10::/28
 orchid2			2001:20::/28
