@@ -1,5 +1,7 @@
 
 #define _GNU_SOURCE
+// scanf(3) "m" modifier is for assignment-allocation as per C99.
+#define _ISOC99_SOURCE
 
 #include <string.h>
 #include <stdlib.h>
@@ -9,7 +11,9 @@
 #include <errno.h>
 #include <glob.h>
 
+#ifndef CIDR_FILE
 #define CIDR_FILE "/etc/cidr"
+#endif
 #define ADDRLEN_BY_AF(x) ( (((x) == AF_INET) ? sizeof(struct in_addr) : ((x) == AF_INET6) ? sizeof(struct in6_addr) : 0)*8 )
 #define TRUE 1
 #define FALSE 0
@@ -283,8 +287,20 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 	
 	while(!feof(cidr_fhnd))
 	{
-		tokens = fscanf(cidr_fhnd, "%as%1[\n]", &token_buf, (char*)&lfbuf);
+		errno = 0;
+		tokens = fscanf(cidr_fhnd, "%ms%1[\n]", &token_buf, (char*)&lfbuf);
+		if(tokens == EOF)
+		{
+			if(errno != 0) warn("fscanf");
+			break;
+		}
+		if(tokens == 0)
+		{
+			slurp_eol(cidr_fhnd);
+			continue;
+		}
 		if(tokens == 2) was_eol = TRUE; else was_eol = FALSE;
+		
 		event = WALK_NONE;
 		ctrl = WALK_CONTINUE;
 		do_wildcards = FALSE;
@@ -397,8 +413,13 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 					char *cidr_str;
 					
 					int search = glob(token_buf, GLOB_ERR | GLOB_NOSORT, glob_error, &search_result);
-					if(search != 0 && search != GLOB_NOMATCH) errx(EXIT_SYS_ERROR, "glob error at '%s'", token_buf);
-					
+					if(search != 0 && search != GLOB_NOMATCH)
+					{
+						if(errno == ENOENT && EQ(getenv("SUBNET_IGNORE_GLOB_ENOENT"), "1"))
+							warnx("glob error at '%s' (ignored)", token_buf);
+						else
+							errx(EXIT_SYS_ERROR, "glob error at '%s'", token_buf);
+					}
 					for(n_path = 0; n_path < search_result.gl_pathc; n_path++)
 					{
 						compound_alias = NULL;
@@ -417,7 +438,7 @@ void walk_cidrs(walk_cidrs_control_t(*callback_func)(walk_cidrs_event_t, char*, 
 						else if(ctrl == WALK_CONTINUE)
 						{
 							fh = file_open(search_result.gl_pathv[n_path]);
-							while(!feof(fh) && fscanf(fh, "%as", &cidr_str)>=1)
+							while(!feof(fh) && fscanf(fh, "%ms", &cidr_str)>=1)
 							{
 								if(cidr_str == NULL) MEMORY_EXCEPTION(-1);
 								ctrl = WALK_CONTINUE;
@@ -684,7 +705,8 @@ int main(int argc, char **argv)
 "  %3d         internal/system error\n"
 "    *         other error\n"
 "Environment:\n"
-"  CIDR_FILE   path for network aliases file\n",
+"  CIDR_FILE   path for network aliases file\n"
+"  SUBNET_IGNORE_GLOB_ENOENT   if set to '1' ignore missing files referenced in the CIDR file\n",
 			CIDR_FILE, EXIT_MATCH, EXIT_NO_MATCH, EXIT_PARSE_ERROR, EXIT_SYS_ERROR);
 	}
 	return EXIT_SYS_ERROR;
