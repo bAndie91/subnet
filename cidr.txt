@@ -54,6 +54,7 @@ rfc6666			discard-prefix
 
 ipv4-mapped-ipv6	::ffff:0:0/96
 rfc6052			64:ff9b::/96
+rfc8215			64:ff9b:1::/48
 teredo			2001::/32
 rfc4380			teredo
 6to4			2002::/16
